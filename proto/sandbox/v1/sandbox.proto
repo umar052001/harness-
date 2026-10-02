@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package sandbox.v1;
+
+option go_package = "github.com/umar052001/ai-os/go/gen/sandbox/v1;sandboxv1";
+
+// Network posture for a run. Denied is the default and the only value the
+// current executor implements; ALLOW is reserved so that loosening the policy
+// later is a deliberate, reviewable change rather than an implicit default.
+enum NetworkPolicy {
+  NETWORK_POLICY_DENIED = 0;
+  NETWORK_POLICY_ALLOW = 1;
+}
+
+// A read+execute grant added on top of the system set.
+message Grant {
+  string path = 1;
+}
+
+// A request to execute a command inside a workspace.
+message ExecRequest {
+  string run_id = 1;
+
+  // Unit of work. Everything under this path is writable by the run; nothing
+  // else is.
+  string workspace = 2;
+
+  // The program and its arguments. argv[0] is resolved against the granted
+  // read paths, not the caller's environment.
+  repeated string argv = 3;
+
+  // Environment overrides. The executor applies these to the child; it does not
+  // inherit the supervisor's environment.
+  map<string, string> env = 4;
+
+  NetworkPolicy network = 5;
+
+  // Extra read+execute roots, needed for toolchains that do not live in the
+  // system directories.
+  repeated Grant extra_read = 6;
+
+  // Working directory inside the workspace.
+  string cwd = 7;
+}
+
+// Evidence that the run was actually confined.
+//
+// This is returned rather than logged on purpose. A control plane that can only
+// claim isolation is not much better than one that does not isolate; shipping the
+// proof alongside the result makes the claim checkable by whoever consumes it.
+message Enforcement {
+  // From prctl(2) in the child, not inferred from policy.
+  bool no_new_privs = 1;
+
+  // Landlock ABI the ruleset was enforced at.
+  uint32 landlock_abi = 2;
+
+  // True when no TCP bind or connect was possible in the child.
+  bool network_denied = 3;
+
+  // The paths that were actually granted, as resolved by the kernel.
+  repeated string granted_paths = 4;
+
+  // Rules installed on the ruleset.
+  uint32 rule_count = 5;
+}
+
+// The result of an execution.
+message ExecResponse {
+  string run_id = 1;
+
+  // The child's own exit status, or 128+signal if it was killed.
+  int32 exit_code = 2;
+
+  // Signal number if the child was terminated, otherwise 0.
+  int32 signal = 3;
+
+  bytes stdout = 4;
+  bytes stderr = 5;
+
+  int64 duration_ns = 6;
+
+  Enforcement enforcement = 7;
+}

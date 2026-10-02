@@ -1,0 +1,16 @@
+[package]
+name = "sandboxd"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Fail-closed Linux sandbox for AI OS: Landlock + seccomp-bpf, PTY, copy-on-write workspaces"
+
+[dependencies]
+landlock = "0.4"
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "abort"
+strip = true

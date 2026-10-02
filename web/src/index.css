@@ -1,0 +1,138 @@
+@import 'tailwindcss';
+
+/*
+ * Muted text, remapped so it is actually readable.
+ *
+ * The dashboard uses zinc-500/600/700 for everything secondary: timestamps,
+ * counters, hints, tab labels, the narrator badge. On these backgrounds the
+ * stock values measure 4.0, 2.5 and 1.9 against white - the 10px timestamps and
+ * the keyboard hints were effectively invisible, and every one of them failed
+ * WCAG AA. The hierarchy is kept, only the values move: these measure 5.8, 6.7
+ * and 7.6, so the dimmest tier is still clearly dimmer than body text.
+ *
+ * Remapping the token fixes all 34 call sites at once and keeps the palette in
+ * one place, rather than leaving a scattered set of text colours to drift.
+ */
+@theme {
+  --color-zinc-500: oklch(0.72 0.012 286);
+  --color-zinc-600: oklch(0.68 0.013 286);
+  --color-zinc-700: oklch(0.64 0.014 286);
+
+  /*
+   * Surfaces, named rather than sprinkled.
+   *
+   * The app previously used a different near-black literal for the shell, the
+   * panels and the drawers - #08090c, #0b0d11, #0a0c10, #07090c - which read as
+   * four subtly mismatched greys and made "which layer am I on" unanswerable.
+   * These three are the whole depth model: the shell, a panel resting on it, and
+   * an elevated control or input. The hairline is the single border colour, so
+   * every seam in the product is the same weight.
+   */
+  --color-surface-0: #0a0b0f;
+  --color-surface-1: #101217;
+  --color-surface-2: #171a21;
+  --color-hairline: #23262f;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface-0);
+  color: #d5d8df;
+  font-size: 13px;
+  line-height: 1.55;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+.mono {
+  font-family: 'SFMono-Regular', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas,
+    monospace;
+}
+
+::selection {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #262a33;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * Rows fade in rather than appearing. A streaming feed that snaps new lines
+ * into place makes the eye jump; a short fade reads as the log growing, which
+ * is what is actually happening. Kept under a quarter second so a fast agent
+ * does not accumulate a visible queue of fading rows.
+ */
+/* The settings drawer arrives from the left, matching the side the gear sits
+   on. A transform is cheaper to animate than a slide of layout properties, and
+   it keeps the panel from repainting the stage on every frame. */
+@keyframes slideIn {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * A visible focus ring on every focusable control.
+ *
+ * Measured across the whole dashboard: not one button, input, select or link
+ * showed a focus indicator, because the inputs carry `outline-none` and the
+ * buttons never had one. Tab order was correct, which means a keyboard user
+ * could move through the page and never know where they were - WCAG 2.4.7
+ * fails. `:focus-visible` keeps the ring off for mouse clicks, and
+ * `body :where(...)` is here to outrank the `outline-none` utility rather than
+ * to style anything.
+ */
+body :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-emerald-400);
+  outline-offset: 2px;
+}

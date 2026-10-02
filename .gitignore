@@ -1,0 +1,34 @@
+# Build output
+.build/
+rust/sandboxd/target/
+web/dist/
+
+# Dependencies
+web/node_modules/
+
+# Local agent tooling and editor state. None of this belongs in the project:
+# these are per-machine conveniences, and committing them makes the repository
+# depend on the tools of whoever pushed it.
+.agents/
+.claude/
+.opencode/
+.graphify/
+graphify-out/
+*.mcp.json
+.mcp.json
+AGENTS.md
+CLAUDE.md
+.vscode/
+.idea/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS noise
+.DS_Store
+Thumbs.db
+*.swp
