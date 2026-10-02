@@ -14,6 +14,7 @@ browser ──SSE──► control plane (Go) ──stdio/ACP──► agent
                       ├── workspace per run, on disk, previewable
                       └── sandboxd (Rust) ──► Landlock, no_new_privs
 ```
+<img width="1144" height="624" alt="image" src="https://github.com/user-attachments/assets/2685e6e0-dec8-4567-90b7-dddd47586db3" />
 
 ## Why it exists
 
