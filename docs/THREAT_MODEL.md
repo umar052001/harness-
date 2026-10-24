@@ -6,8 +6,8 @@ that a reviewer can find the edges rather than take the summary on trust.
 ## The claim
 
 > A command run through `sandboxd` cannot read or write files outside its
-> granted paths, cannot open a network connection, and cannot gain privileges it
-> did not already have.
+> granted paths and cannot gain privileges through exec. The default policy
+> denies network access; a labelled network grant disables that restriction.
 
 ## The adversary
 
@@ -16,7 +16,7 @@ model-authored program. It may be buggy, hostile, or attempting to influence its
 own harness. It has the uid of the user who started it and no more.
 
 It is *not* assumed to be cooperative with the reporting mechanism. See
-[Limits](#limits-that-are-real).
+[Limitations](#limitations).
 
 ## Controls
 
@@ -39,7 +39,11 @@ installed. Mounts created by a privileged parent before the fork are visible.
 
 ### Network
 
-ABI v4+ rules with zero network grants, so `bind` and `connect` are refused.
+The default policy uses ABI v4+ rules with zero network grants, so TCP `bind`
+and `connect` are refused. Agents that need a remote model provider receive an
+explicit network grant. That grant is not restricted to the provider's domains:
+the agent and its tools can reach other network services, including local ones.
+Filesystem restrictions still apply.
 Notably, `socket(2)` is *not* restricted by Landlock — the restriction is on
 connecting and binding — so a probe that only tries to create a socket would
 falsely report the sandbox as open. The attestation therefore attempts a real
@@ -93,7 +97,7 @@ lacks Landlock, the executor exits without exec'ing. There is no path that runs
 the command unconfined. Exit code 125 distinguishes a refusal from the command's
 own failure, so an operator can tell the two apart.
 
-## Limits that are real
+## Limitations
 
 **The attestation is not unforgeable.** The child writes its own evidence to a
 pipe, so a deliberately hostile child controls that pipe and could lie about it.

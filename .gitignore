@@ -1,3 +1,6 @@
+# Local presentations
+/architecture.html
+
 # Build output
 .build/
 rust/sandboxd/target/
@@ -6,9 +9,7 @@ web/dist/
 # Dependencies
 web/node_modules/
 
-# Local agent tooling and editor state. None of this belongs in the project:
-# these are per-machine conveniences, and committing them makes the repository
-# depend on the tools of whoever pushed it.
+# Local agent tooling and editor state
 .agents/
 .claude/
 .opencode/
@@ -18,6 +19,14 @@ graphify-out/
 .mcp.json
 AGENTS.md
 CLAUDE.md
+skills/
+.skills/
+opencode.json
+opencode.jsonc
+mcp.json
+.playwright-mcp/
+playwright-report/
+test-results/
 .vscode/
 .idea/
 
@@ -27,6 +36,18 @@ CLAUDE.md
 !.env.example
 *.pem
 *.key
+
+# Runtime state and generated projects
+workspaces/
+recordings/
+screenshots/
+*.events.jsonl
+*.sse
+*.log
+*.db
+*.db-shm
+*.db-wal
+.server.lock
 
 # OS noise
 .DS_Store

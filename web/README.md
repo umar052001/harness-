@@ -6,6 +6,7 @@ Go control plane from `web/dist`.
 ```sh
 npm install
 npm run build     # type-checks with tsc -b, then bundles to dist/
+npm test          # streaming and event-rendering regressions
 npm run dev       # vite dev server on :5173, proxying /api to :8090
 ```
 
