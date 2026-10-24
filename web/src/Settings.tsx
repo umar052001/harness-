@@ -55,7 +55,9 @@ export default function SettingsDrawer(props: SettingsProps) {
   return (
     <Show when={props.open}>
       <Portal>
-        <div class="fixed inset-0 z-50">
+        <dialog ref={el => queueMicrotask(() => el.isConnected && el.showModal())}
+          onCancel={e => { e.preventDefault(); props.onClose() }}
+          class="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 text-inherit">
           <button
             type="button"
             aria-label="Close settings"
@@ -171,8 +173,7 @@ export default function SettingsDrawer(props: SettingsProps) {
                   class="mono w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-xs text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/60"
                 />
                 <p class="mt-1.5 text-[10px] leading-relaxed text-zinc-700">
-                  Left empty, the agent picks its own default. Set it to pin one
-                  model for every run — the surest way to keep spend predictable.
+                  OpenCode uses Big Pickle (opencode/big-pickle) unless you select another model.
                 </p>
               </section>
 
@@ -188,10 +189,10 @@ export default function SettingsDrawer(props: SettingsProps) {
                     class="mt-0.5 size-4 shrink-0 accent-emerald-500"
                   />
                   <span class="text-[12px] leading-snug text-zinc-400">
-                    auto-approve every tool
+                    Allow tools inside the sandbox
                     <span class="mt-0.5 block text-[10px] leading-relaxed text-zinc-700">
-                      Nothing is asked before a tool runs. Convenient and less
-                      safe: an agent that deletes a directory needs no permission.
+                      Enables the agent to write files and run commands in its workspace.
+                      When off, requests are denied automatically; no approval dialog is shown.
                     </span>
                   </span>
                 </label>
@@ -231,7 +232,7 @@ export default function SettingsDrawer(props: SettingsProps) {
               Nothing is approved by default unless you turn it on above.
             </div>
           </aside>
-        </div>
+        </dialog>
       </Portal>
     </Show>
   )

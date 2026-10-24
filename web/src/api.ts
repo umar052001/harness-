@@ -10,14 +10,18 @@ import type {
   RunSummary,
 } from './types'
 
+function request(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(10000) })
+}
+
 export async function fetchHealth(): Promise<Health> {
-  const res = await fetch('/api/health')
+  const res = await request('/api/health')
   if (!res.ok) throw new Error(`health ${res.status}`)
   return res.json()
 }
 
 export async function fetchHarnesses(): Promise<Harness[]> {
-  const res = await fetch('/api/harnesses')
+  const res = await request('/api/harnesses')
   if (!res.ok) throw new Error(`harnesses ${res.status}`)
   const body = (await res.json()) as { harnesses: Harness[] }
   return body.harnesses
@@ -25,14 +29,14 @@ export async function fetchHarnesses(): Promise<Harness[]> {
 
 /** fetchListing describes what a run left behind. */
 export async function fetchListing(runId: string): Promise<Listing> {
-  const res = await fetch(`/api/workspace/${encodeURIComponent(runId)}`)
+  const res = await request(`/api/workspace/${encodeURIComponent(runId)}`)
   if (!res.ok) throw new Error(`listing ${res.status}`)
   return res.json()
 }
 
 /** fetchRuns lists previous runs, so output stays reachable. */
 export async function fetchRuns(): Promise<RunSummary[]> {
-  const res = await fetch('/api/runs')
+  const res = await request('/api/runs')
   if (!res.ok) throw new Error(`runs ${res.status}`)
   const body = (await res.json()) as { runs: RunSummary[] }
   return body.runs
@@ -47,7 +51,7 @@ export async function fetchRuns(): Promise<RunSummary[]> {
  * was still going.
  */
 export async function fetchActive(): Promise<{ active: ActiveRun[]; limit: number }> {
-  const res = await fetch('/api/runs/active')
+  const res = await request('/api/runs/active')
   if (!res.ok) throw new Error(`active ${res.status}`)
   return (await res.json()) as { active: ActiveRun[]; limit: number }
 }
@@ -61,7 +65,7 @@ export async function fetchActive(): Promise<{ active: ActiveRun[]; limit: numbe
  * one renderer.
  */
 export async function fetchRunEvents(runId: string): Promise<RunEvent[]> {
-  const res = await fetch(`/api/workspace/${encodeURIComponent(runId)}/events`)
+  const res = await request(`/api/workspace/${encodeURIComponent(runId)}/events`)
   if (!res.ok) throw new Error(`events ${res.status}`)
   const body = (await res.json()) as { events: RunEvent[] }
   return body.events
@@ -113,7 +117,7 @@ export interface PublishedSite {
  * usual cause is a run that wrote source but never got as far as building it.
  */
 export async function publishSite(runId: string): Promise<PublishedSite> {
-  const res = await fetch(`/api/workspace/${encodeURIComponent(runId)}/publish`, { method: 'POST' })
+  const res = await request(`/api/workspace/${encodeURIComponent(runId)}/publish`, { method: 'POST' })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text.trim() || `publish ${res.status}`)
@@ -124,7 +128,7 @@ export async function publishSite(runId: string): Promise<PublishedSite> {
 
 /** fetchPublished is the address a run is already live on, if it has one. */
 export async function fetchPublished(runId: string): Promise<string | null> {
-  const res = await fetch(`/api/workspace/${encodeURIComponent(runId)}/publish`)
+  const res = await request(`/api/workspace/${encodeURIComponent(runId)}/publish`)
   if (!res.ok) return null
   const body = (await res.json()) as { published: boolean; site?: PublishedSite }
   return body.published && body.site ? (body.site.urls[0] ?? null) : null
@@ -132,7 +136,7 @@ export async function fetchPublished(runId: string): Promise<string | null> {
 
 /** fetchText reads a workspace file for the code viewer. */
 export async function fetchText(runId: string, path: string, limit = 400_000): Promise<string> {
-  const res = await fetch(rawURL(runId, path))
+  const res = await request(downloadURL(runId, path))
   if (!res.ok) throw new Error(`read ${res.status}`)
   const text = await res.text()
   return text.length > limit ? `${text.slice(0, limit)}\n… truncated …` : text
@@ -176,6 +180,16 @@ export async function streamRun(
   onEvent: (ev: RunEvent) => void,
   signal?: AbortSignal,
 ): Promise<StreamResult> {
+  try {
+    return await readRun(req, onEvent, signal)
+  } catch (error) {
+    return { ok: false, error: signal?.aborted
+      ? 'Run stopped. Files already written are saved.'
+      : `Connection lost. Check run history before retrying. ${(error as Error).message}` }
+  }
+}
+
+async function readRun(req: RunRequest, onEvent: (ev: RunEvent) => void, signal?: AbortSignal): Promise<StreamResult> {
   const res = await fetch('/api/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -200,8 +214,9 @@ export async function streamRun(
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  let ended: StreamResult = { ok: true }
+  let ended: StreamResult = { ok: false, error: 'Connection ended before completion. Check run history before retrying.' }
 
+  try {
   for (;;) {
     const { done, value } = await reader.read()
     buf += decoder.decode(value, { stream: !done })
@@ -227,7 +242,15 @@ export async function streamRun(
   const parsed = parseFrame(buf)
   if (parsed && parsed[0] === 'stream.end') ended = parsed[1] as StreamResult
 
-  return ended
+    return ended
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+export async function stopRun(id: string): Promise<void> {
+  const res = await fetch(`/api/runs/${encodeURIComponent(id)}/stop`, { method: 'POST', signal: AbortSignal.timeout(10000) })
+  if (!res.ok && res.status !== 404) throw new Error('Could not stop the run. Try again.')
 }
 
 function parseFrame(frame: string): [string, unknown] | null {

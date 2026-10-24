@@ -79,6 +79,7 @@ export default function Artifacts(props: {
     if (!id) return
     try {
       const next = await fetchListing(id)
+      if (props.runId !== id) return
       setListing(next)
       setError('')
       // The status line wants to say how much has been produced; this panel is
@@ -87,7 +88,7 @@ export default function Artifacts(props: {
       // Keep the reader's selection if it still exists.
       if (open() && !next.files.some((f) => f.path === open())) setOpen(null)
     } catch (e) {
-      setError((e as Error).message)
+      if (props.runId === id) setError((e as Error).message)
     }
   }
 
@@ -95,6 +96,7 @@ export default function Artifacts(props: {
     // Prior runs are kept on disk, so they have to be offered on load. A run id
     // only lives in this tab's memory, which means without this a reload throws
     // away the output of the run you were watching.
+    if (!props.onSelectRun) return
     void fetchRuns()
       .then((rs) => {
         setRuns(rs)
@@ -107,11 +109,12 @@ export default function Artifacts(props: {
     const id = props.runId
     if (!id) return
     setListing(null)
+    setError('')
     setOpen(null)
     setSource(null)
     setSite('')
     void fetchPublished(id)
-      .then((u) => setSite(u ?? ''))
+      .then((u) => { if (props.runId === id) setSite(u ?? '') })
       .catch(() => undefined)
     void refresh()
   })
@@ -161,13 +164,17 @@ export default function Artifacts(props: {
       return
     }
     try {
-      setSource({ path, text: await fetchText(id, path) })
+      const text = await fetchText(id, path)
+      if (props.runId === id && open() === path) setSource({ path, text })
     } catch (e) {
-      setError((e as Error).message)
+      if (props.runId === id && open() === path) setError((e as Error).message)
     }
   }
 
-  const previewPath = createMemo(() => listing()?.preview ?? '')
+  const previewPath = createMemo(() => {
+    const chosen = open()
+    return chosen && /\.html?$/i.test(chosen) ? chosen : listing()?.preview ?? ''
+  })
 
   // Build output gets its own download because it is what most people actually
   // want: a zip of `dist` is the site, ready to drop on any host, while a zip of
@@ -185,7 +192,7 @@ export default function Artifacts(props: {
     // Once published, the panel frames the published address. It is the same
     // bytes a visitor gets, so what is on screen is what the link shows - and
     // root-absolute references resolve on their own, with no rewriting.
-    if (site()) return `${site()}/?v=${nonce()}`
+    if (site() && !open()) return `${site()}/?v=${nonce()}`
     const id = props.runId
     const path = previewPath()
     if (!id || !path) return ''
@@ -214,7 +221,7 @@ export default function Artifacts(props: {
     }
     let cancelled = false
     setPreviewState('checking')
-    void fetch(url, { method: 'HEAD' })
+    void fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10000) })
       .then((res) => {
         if (!cancelled) setPreviewState(res.ok ? 'ok' : 'error')
       })
@@ -263,7 +270,7 @@ export default function Artifacts(props: {
   })
 
   const frameSandbox = () =>
-    site()
+    site() && !open()
       ? 'allow-scripts allow-same-origin allow-forms allow-popups'
       : 'allow-scripts allow-forms allow-popups'
 
@@ -277,6 +284,7 @@ export default function Artifacts(props: {
     setPublishing(true)
     try {
       const published = await publishSite(id)
+      if (props.runId !== id) return
       setSite(published.urls[0] ?? '')
       setNonce((n) => n + 1)
     } catch (e) {
@@ -323,7 +331,7 @@ export default function Artifacts(props: {
   return (
     <section class="relative flex min-h-0 flex-1 flex-col bg-surface-1">
       <div class="flex shrink-0 items-center gap-2 px-3 py-1.5 text-[11px]">
-        <Show when={runs().length > 0}>
+        <Show when={props.onSelectRun && runs().length > 0}>
           <select
             value={props.runId ?? ''}
             onChange={(e) => props.onSelectRun?.(e.currentTarget.value)}
@@ -390,13 +398,13 @@ export default function Artifacts(props: {
                 onClick={() => void doPublish()}
                 disabled={publishing()}
                 class="shrink-0 rounded border border-zinc-700 px-2 py-1.5 uppercase tracking-wider text-zinc-400 transition hover:border-emerald-500/60 hover:text-emerald-300 disabled:opacity-50"
-                title="Give this build an address of its own that resolves without rewriting"
+                title="A localhost address on this machine, not an internet deployment"
               >
-                {publishing() ? 'publishing…' : 'publish site'}
+                {publishing() ? 'preparing…' : 'Create local link'}
               </button>
             }
           >
-            <span class="shrink-0 uppercase tracking-wider text-emerald-500/80">live</span>
+            <span class="shrink-0 uppercase tracking-wider text-emerald-500/80">local link</span>
           </Show>
           <WidthPicker
             value={width()}
@@ -485,8 +493,8 @@ export default function Artifacts(props: {
         <Show
           when={(listing()?.files.length ?? 0) > 0}
           fallback={
-            <div class="flex flex-1 flex-col items-center justify-center gap-1 text-zinc-700">
-              <Show when={props.running} fallback={<span class="text-xs">nothing was written</span>}>
+            <div class="empty-result">
+              <Show when={props.running} fallback={<><h2>No output files yet</h2><p>Open Activity to see what happened. Adjust your request and start a new run; previous work stays saved.</p></>}>
                 <span class="size-3 animate-spin rounded-full border border-zinc-700 border-t-cyan-400" />
                 <span class="text-[11px]">waiting for the first file…</span>
               </Show>
@@ -542,6 +550,9 @@ export default function Artifacts(props: {
                 />
               </Show>
             </div>
+          </Show>
+          <Show when={!previewURL()}>
+            <div class="empty-result"><h2>Your files are ready to explore</h2><p>This project has no static HTML preview yet. Browse its source or download the project to run it locally.</p><button onClick={() => setFilesOpen(true)}>Browse {listing()?.files.length} files</button></div>
           </Show>
         </Show>
       </Show>

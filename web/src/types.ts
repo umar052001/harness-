@@ -76,6 +76,13 @@ export interface RunSummary {
   dir: string
   modTime: string
   files: number
+  prompt?: string
+  harnessId?: string
+  model?: string
+  status?: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
 }
 
 export interface NarrateStatus {

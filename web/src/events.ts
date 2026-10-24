@@ -142,19 +142,6 @@ function squash(s: string): string {
   return s.replace(/\s+/g, '')
 }
 
-/** messageExtends reports whether next continues or repeats what row already has. */
-function messageExtends(row: string, next: string): 'replace' | 'append' | 'skip' {
-  const a = squash(row)
-  const b = squash(next)
-  if (a === b || b === a) return 'replace'
-  // The assembled message is the stream plus the answer, and the thought can
-  // land anywhere in it - not only at the front. Containment is what identifies
-  // "this is the same message, complete" rather than "this is a new sentence".
-  if (b.includes(a)) return 'replace'
-  if (a.includes(b)) return 'skip'
-  return 'append'
-}
-
 /**
  * toolLabel turns a tool event into a sentence about an action.
  *
@@ -354,6 +341,7 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
           existing.title = title
           if (detail) existing.detail = detail
           existing.status = status
+          existing.tone = status === 'failed' ? 'bad' : status === 'done' ? 'idle' : 'run'
           if (status !== 'running') summary.step = ''
         } else {
           // Counted here, once per call. Counting on every frame counted the
@@ -384,9 +372,9 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
         items.push({
           kind: 'step',
           id: `perm-${ev.seq}`,
-          title: 'Waiting for approval',
+          title: d?.status === 'approved' ? 'Tool approved' : 'Tool denied — enable Allow tools for a new run',
           detail: evText,
-          status: 'running',
+          status: 'done',
           tone: 'warn',
           at: ev.at,
           repeats: 1,
@@ -401,16 +389,22 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
         // folded into a single row: a chunk that restates the row replaces it, a
         // chunk that extends it is appended, and the assembled restatement is
         // absorbed rather than repeated.
-        const text = oneLine(evText, 900)
+        const text = evText
         if (!text) break
         const final = d?.final === true
+        if (final) {
+          const messages = items.filter((item): item is Item & { kind: 'say' } => item.kind === 'say')
+          if (squash(messages.map(item => item.text).join('')) === squash(text) && messages.length) {
+            messages[messages.length - 1].final = true
+            break
+          }
+        }
         const last = items.length > 0 ? items[items.length - 1] : undefined
         const open = last?.kind === 'say' && !last.final ? last : null
 
         if (open) {
-          const how = messageExtends(open.text, text)
-          if (how === 'replace') open.text = text
-          else if (how === 'append') open.text = `${open.text} ${text}`.trim()
+          if (final) open.text = text
+          else open.text += text
           if (final) open.final = true
           break
         }
@@ -460,7 +454,7 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
         const ok = d?.ok !== false
         finished = true
         summary.phase = ok ? 'done' : 'failed'
-        if (!ok && !summary.error) summary.error = evText || 'the run failed'
+        if (!ok && !summary.error) summary.error = str(d?.error) || evText || 'the run failed'
         if (sandboxPolicy.length > 0) {
           items.push({
             kind: 'log',
@@ -475,7 +469,7 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
         items.push({
           kind: 'phase',
           id: `phase-done-${ev.seq}`,
-          title: ok ? 'Finished' : 'Stopped with an error',
+          title: ok ? 'Finished' : d?.status === 'cancelled' ? 'Run stopped' : d?.status === 'timed_out' ? 'Time limit reached' : 'Stopped with an error',
           detail: summary.error || undefined,
           tone: ok ? 'good' : 'bad',
           at: ev.at,
@@ -489,7 +483,7 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
     }
   }
   flushLog()
-  if (started > 0 && summary.phase !== 'done') {
+  if (started > 0 && !finished) {
     summary.elapsedSec = Math.max(0, Math.round((Date.now() - started) / 1000))
   }
   return { items: groupRuns(items), summary }

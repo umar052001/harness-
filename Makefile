@@ -20,6 +20,7 @@ run: server
 
 test:
 	cd go && go test ./...
+	cd web && npm test
 	cargo test --release --manifest-path rust/sandboxd/Cargo.toml
 	cargo clippy --release --all-targets --manifest-path rust/sandboxd/Cargo.toml -- -D warnings
 
