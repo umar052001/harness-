@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -52,6 +53,7 @@ type Listing struct {
 
 // Run is one workspace in the store's history.
 type Run struct {
+	RunMetadata
 	ID      string    `json:"id"`
 	Dir     string    `json:"dir"`
 	ModTime time.Time `json:"modTime"`
@@ -287,7 +289,7 @@ func (s *WorkspaceStore) Dir(id string) (string, error) {
 		return "", fmt.Errorf("workspace: unknown run %q", id)
 	}
 	dir := filepath.Join(s.root, id)
-	fi, err := os.Stat(dir)
+	fi, err := os.Lstat(dir)
 	if err != nil || !fi.IsDir() {
 		return "", fmt.Errorf("workspace: unknown run %q", id)
 	}
@@ -314,6 +316,11 @@ func (s *WorkspaceStore) resolve(id, rel string) (string, error) {
 			return "", errors.New("workspace: path escapes the run directory")
 		}
 		rel = clean
+		for _, segment := range strings.Split(filepath.ToSlash(rel), "/") {
+			if agentStateDirs[segment] {
+				return "", errors.New("workspace: agent state is not a project artifact")
+			}
+		}
 	}
 	full := filepath.Join(dir, rel)
 	resolved, err := filepath.EvalSymlinks(full)
@@ -368,11 +375,11 @@ func (s *WorkspaceStore) List(id string) (Listing, error) {
 			return filepath.SkipAll
 		}
 		info, ierr := d.Info()
-		var size int64
-		if ierr == nil {
-			size = info.Size()
-			out.Bytes += size
+		if ierr != nil || !info.Mode().IsRegular() {
+			return nil
 		}
+		size := info.Size()
+		out.Bytes += size
 		out.Files = append(out.Files, WorkspaceFile{
 			Path:    filepath.ToSlash(rel),
 			Kind:    classify(filepath.ToSlash(rel)),
@@ -408,14 +415,21 @@ func (s *WorkspaceStore) Runs(limit int) []Run {
 		if info, err := e.Info(); err == nil {
 			r.ModTime = info.ModTime()
 		}
-		if l, err := s.List(e.Name()); err == nil {
-			r.Files = len(l.Files)
+		r.RunMetadata = s.metadata(e.Name())
+		if !r.StartedAt.IsZero() {
+			r.ModTime = r.StartedAt
 		}
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ModTime.After(out[j].ModTime) })
 	if len(out) > limit {
 		out = out[:limit]
+	}
+	// Only walk the requested page, not every historical dependency tree.
+	for i := range out {
+		if l, err := s.List(out[i].ID); err == nil {
+			out[i].Files = len(l.Files)
+		}
 	}
 	return out
 }
@@ -444,11 +458,30 @@ func (s *WorkspaceStore) Open(id, rel string) (*os.File, int64, error) {
 	if fi.Size() > maxPreviewBytes {
 		return nil, 0, fmt.Errorf("workspace: file is larger than %d bytes", maxPreviewBytes)
 	}
-	f, err := os.Open(full)
+	dir, err := s.Dir(id)
+	if err != nil {
+		return nil, 0, err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer root.Close()
+	relative, err := filepath.Rel(dir, full)
+	if err != nil {
+		return nil, 0, err
+	}
+	// OpenRoot prevents a symlink swap between validation and opening the file.
+	f, err := root.OpenFile(relative, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, 0, fmt.Errorf("workspace: %w", err)
 	}
-	return f, fi.Size(), nil
+	actual, err := f.Stat()
+	if err != nil || !actual.Mode().IsRegular() || actual.Size() > maxPreviewBytes {
+		_ = f.Close()
+		return nil, 0, errors.New("workspace: not a previewable regular file")
+	}
+	return f, actual.Size(), nil
 }
 
 // classify buckets a path so the frontend can pick an icon and a syntax mode

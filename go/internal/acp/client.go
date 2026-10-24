@@ -128,7 +128,7 @@ type Options struct {
 	// curated set with a sandboxed HOME precisely to keep the agent out of the
 	// operator's real one.
 	env []string
-	// RequestTimeout bounds a single request that produced no response.
+	// RequestTimeout bounds idle control requests. Prompts use their context deadline.
 	RequestTimeout time.Duration
 	// OnClose runs when the client is closed, after the agent transport has been
 	// released. It is how a caller ties the client's lifetime to something the
@@ -199,7 +199,7 @@ type Client struct {
 // collector accumulates one prompt's output.
 type collector struct {
 	mu        sync.Mutex
-	text      string
+	text      strings.Builder
 	toolCalls int
 	// seen deduplicates tool updates by call id.
 	//
@@ -213,7 +213,7 @@ type collector struct {
 
 func (c *collector) addText(s string) {
 	c.mu.Lock()
-	c.text += s
+	c.text.WriteString(s)
 	c.mu.Unlock()
 }
 
@@ -235,7 +235,7 @@ func (c *collector) addTool(id string) {
 func (c *collector) snapshot() (string, int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.text, c.toolCalls
+	return c.text.String(), c.toolCalls
 }
 
 // Connect starts the agent and performs the ACP handshake.
@@ -254,6 +254,8 @@ func Connect(ctx context.Context, command string, args []string, env []string, o
 // handshake performs the ACP initialize and session/new exchange on a running
 // transport. It is shared by Connect and ConnectIO so both paths cannot drift.
 func handshake(ctx context.Context, p *process, opts Options) (*Client, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 	c := &Client{
 		cmd:            p,
 		pending:        map[int64]chan *message{},
@@ -317,7 +319,12 @@ func handshake(ctx context.Context, p *process, opts Options) (*Client, error) {
 	// in whether they accept a missing key, and an empty list means "no extra
 	// servers" unambiguously.
 	var sessionResult struct {
-		SessionID string `json:"sessionId"`
+		SessionID     string `json:"sessionId"`
+		ConfigOptions []struct {
+			ID           string `json:"id"`
+			Category     string `json:"category"`
+			CurrentValue string `json:"currentValue"`
+		} `json:"configOptions"`
 	}
 	if err := c.call(ctx, "session/new", map[string]any{
 		"cwd":        opts.Cwd,
@@ -331,6 +338,21 @@ func handshake(ctx context.Context, p *process, opts Options) (*Client, error) {
 		return nil, errors.New("acp: session/new returned no sessionId")
 	}
 	c.sessionID = sessionResult.SessionID
+	if opts.Model != "" {
+		method := "session/set_model"
+		params := map[string]any{"sessionId": c.sessionID, "modelId": opts.Model}
+		for _, option := range sessionResult.ConfigOptions {
+			if option.Category == "model" || option.ID == "model" {
+				method = "session/set_config_option"
+				params = map[string]any{"sessionId": c.sessionID, "configId": option.ID, "value": opts.Model}
+				break
+			}
+		}
+		if err := c.call(ctx, method, params, nil); err != nil {
+			_ = c.Close()
+			return nil, fmt.Errorf("select model %s: %w", opts.Model, err)
+		}
+	}
 	c.agentName = initResult.AgentInfo.Name
 	c.agentVersion = initResult.AgentInfo.Version
 	return c, nil

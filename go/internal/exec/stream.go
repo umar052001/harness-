@@ -116,11 +116,14 @@ type Stream struct {
 	events     chan StreamEvent
 	eventsDone chan struct{}
 
-	waitOnce sync.Once
-	waitCode int
-	stopOnce sync.Once
-	closed   chan struct{}
-	closeOne sync.Once
+	waitOnce    sync.Once
+	waitCode    int
+	stopOnce    sync.Once
+	closed      chan struct{}
+	closeOne    sync.Once
+	stopping    chan struct{}
+	processDone chan struct{}
+	eventReader io.Closer
 }
 
 // Events returns the event channel. It is closed when the run ends.
@@ -179,12 +182,15 @@ func (c *Client) Stream(ctx context.Context, req *StreamRequest) (*Stream, error
 
 	cmd := exec.Command(c.Binary, args...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	cmd.WaitDelay = 3 * time.Second
 
 	s := &Stream{
-		cmd:        cmd,
-		events:     make(chan StreamEvent, 256),
-		eventsDone: make(chan struct{}),
-		closed:     make(chan struct{}),
+		cmd:         cmd,
+		events:      make(chan StreamEvent, 256),
+		eventsDone:  make(chan struct{}),
+		closed:      make(chan struct{}),
+		stopping:    make(chan struct{}),
+		processDone: make(chan struct{}),
 	}
 
 	// Where the NDJSON event stream comes from.
@@ -258,6 +264,7 @@ func (c *Client) Stream(ctx context.Context, req *StreamRequest) (*Stream, error
 		}
 	}
 
+	s.eventReader, _ = eventSrc.(io.Closer)
 	go s.readEvents(eventSrc)
 	go func() {
 		_ = cmd.Wait()
@@ -266,10 +273,18 @@ func (c *Client) Stream(ctx context.Context, req *StreamRequest) (*Stream, error
 			code = cmd.ProcessState.ExitCode()
 		}
 		s.waitOnce.Do(func() { s.waitCode = code })
+		close(s.processDone)
 		// The event reader closes the channel; waiting for it means the final
 		// exit event is never dropped.
 		<-s.eventsDone
 		s.closeClosed()
+	}()
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.Close()
+		case <-s.closed:
+		}
 	}()
 
 	return s, nil
@@ -277,6 +292,9 @@ func (c *Client) Stream(ctx context.Context, req *StreamRequest) (*Stream, error
 
 // readEvents parses NDJSON until the stream ends.
 func (s *Stream) readEvents(src io.Reader) {
+	if closer, ok := src.(io.Closer); ok {
+		defer closer.Close()
+	}
 	defer close(s.events)
 	defer close(s.eventsDone)
 	sc := bufio.NewScanner(src)
@@ -298,8 +316,8 @@ func (s *Stream) readEvents(src io.Reader) {
 		}
 		select {
 		case s.events <- ev:
-		case <-s.closed:
-			return
+		case <-s.stopping:
+			// Keep draining so a full event channel cannot block process teardown.
 		}
 	}
 }
@@ -316,21 +334,19 @@ func (s *Stream) closeClosed() { s.closeOne.Do(func() { close(s.closed) }) }
 // not go quietly.
 func (s *Stream) Close() error {
 	s.stopOnce.Do(func() {
-		if s.cmd != nil && s.cmd.Process != nil {
-			_ = s.cmd.Process.Signal(syscall.SIGTERM)
-			go func() {
-				// eventsDone closes when the reader has seen EOF, which is the
-				// same moment the executor has flushed its final events.
-				select {
-				case <-s.eventsDone:
-				case <-time.After(3 * time.Second):
-					_ = s.cmd.Process.Kill()
-					s.closeClosed()
-				}
-			}()
-			return
+		close(s.stopping)
+		_ = s.cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-s.processDone:
+		case <-time.After(3 * time.Second):
+			_ = s.cmd.Process.Kill()
+			<-s.processDone
 		}
-		s.closeClosed()
+		// A descendant may still hold a copied descriptor. Never await its EOF.
+		if s.eventReader != nil {
+			_ = s.eventReader.Close()
+		}
+		<-s.closed
 	})
 	return nil
 }
@@ -341,7 +357,6 @@ func (s *Stream) Wait(ctx context.Context) int {
 	case <-ctx.Done():
 		return -1
 	case <-s.closed:
-		s.waitOnce.Do(func() { s.waitCode = 0 })
 		return s.waitCode
 	}
 }

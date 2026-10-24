@@ -57,6 +57,7 @@ type process struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
+	reader io.Closer
 
 	waitOnce sync.Once
 	stopOnce sync.Once
@@ -85,12 +86,14 @@ func (p *process) stop() error {
 		if p.stdin != nil {
 			_ = p.stdin.Close()
 		}
+		if p.reader != nil {
+			_ = p.reader.Close()
+		}
 		if p.cmd == nil || p.cmd.Process == nil {
 			return
 		}
 		if p.cmd.Process.Pid > 0 {
-			_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
-			_ = p.cmd.Process.Kill()
+			_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
 		}
 		p.waitOnce.Do(func() { _ = p.cmd.Wait() })
 	})
@@ -120,6 +123,7 @@ func ConnectIO(ctx context.Context, name string, stdin io.Reader, stdinW io.Writ
 		stdout: bufio.NewReaderSize(stdout, 64*1024),
 		cmd:    nil,
 	}
+	p.reader, _ = stdout.(io.Closer)
 	_ = name
 	return handshake(ctx, p, opts)
 }
@@ -131,6 +135,7 @@ func startCmd(cmd *exec.Cmd, opts Options) (*process, error) {
 	// Its own process group, so a timeout reaches helpers and a signal aimed at
 	// the control plane does not hit a half-torn-down agent.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 3 * time.Second
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -151,6 +156,7 @@ func startCmd(cmd *exec.Cmd, opts Options) (*process, error) {
 		return nil, fmt.Errorf("acp: stderr pipe: %w", err)
 	}
 
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stderrR.Close()
@@ -169,7 +175,7 @@ func startCmd(cmd *exec.Cmd, opts Options) (*process, error) {
 		_ = stderrR.Close()
 	}()
 
-	return &process{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout)}, nil
+	return &process{cmd: cmd, stdin: stdin, stdout: bufio.NewReader(stdout), reader: stdout}, nil
 }
 
 // write sends one frame. The mutex matters because a request and a notification
@@ -211,7 +217,7 @@ func (c *Client) readLoop() {
 			// EOF, or the agent died. Pending requests are failed rather than
 			// left to time out, so a crash surfaces as a prompt error and not as
 			// a two-minute stall.
-			if !errors.Is(err, io.EOF) {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
 				c.emit(Event{Type: EventError, Text: "acp: reading agent output: " + err.Error()})
 			}
 			c.failPending(err)
@@ -320,10 +326,8 @@ func (c *Client) dispatch(m *message) {
 		c.replyError(m, -32601, "ai-os client does not provide "+m.Method+
 			": file and terminal access belong to the agent's own tools inside the sandbox")
 	default:
-		// Notifications are surfaced rather than dropped, so a protocol
-		// extension is visible in the UI instead of silently ignored. Unknown
-		// requests carrying an id are left unanswered on purpose: replying with
-		// a made-up method is worse than saying nothing.
+		// Unknown requests must get a reply or the peer waits indefinitely.
+		c.replyError(m, -32601, "unsupported method: "+m.Method)
 		c.emit(Event{Type: EventAvailable, Text: m.Method, Raw: m.Params})
 	}
 }
@@ -342,6 +346,8 @@ func (c *Client) replyError(m *message, code int, msg string) {
 
 // call performs one request/response round trip.
 func (c *Client) call(ctx context.Context, method string, params, out any) error {
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
 	c.writeMu.Lock()
 	id := int64(c.nextID)
 	c.nextID++
@@ -372,6 +378,13 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	timeoutC := timer.C
+	// ACP need not emit progress while generating tool arguments. Prompt owns
+	// a total deadline, so silence alone is not evidence that its agent is stuck.
+	if method == "session/prompt" {
+		timer.Stop()
+		timeoutC = nil
+	}
 
 	// The loop exists so an inbound frame can rearm the timer. A prompt that
 	// streams progress for longer than the deadline is working, not stuck, so the
@@ -381,9 +394,8 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	for {
 		select {
 		case <-ctx.Done():
-			// Tell the agent we are leaving before the caller tears the process
-			// down, so a well-behaved agent can stop rather than be killed mid-write.
-			_ = c.cancelNotification(ctx)
+			// Close releases a blocked pipe writer as well as the process.
+			_ = c.Close()
 			return ctx.Err()
 		case <-c.readDone:
 			// The reader exited; failPending will deliver an error, but returning
@@ -394,12 +406,15 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 			default:
 				return errors.New("agent exited before responding")
 			}
-		case <-timer.C:
+		case <-timeoutC:
 			// No "acp:" and no method name: every caller wraps this with the
 			// method it called, and both prefixes at once read as a bug in the
 			// error message the user is looking at.
 			return fmt.Errorf("no response and no activity for %s", timeout)
 		case <-c.progress:
+			if timeoutC == nil {
+				continue
+			}
 			if !timer.Stop() {
 				// Already fired but not yet collected: drain so Reset cannot
 				// leave a stale tick in the channel.

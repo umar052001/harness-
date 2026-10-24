@@ -28,10 +28,10 @@ var builtins = []Harness{
 		NeedsNetwork: "model provider over HTTPS",
 		ID:           "opencode", Name: "OpenCode", Kind: KindACP,
 		Command: "opencode", Args: []string{"acp"},
-		ModelFlags: []ModelFlag{{Flag: "--model"}},
-		Cost:       CostFreeTier, License: "MIT",
+		// ACP selects the model after session/new; the acp CLI has no --model flag.
+		Cost: CostFreeTier, License: "MIT",
 		InstalledBy: "npm i -g opencode-ai",
-		Notes:       "Free Zen models without an API key. Best default.",
+		Notes:       "Big Pickle by default, selected explicitly through ACP.",
 	},
 	{
 		NeedsNetwork: "Google Generative Language API over HTTPS",

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -118,6 +119,11 @@ func (s *Server) handleWorkspaceArchive(w http.ResponseWriter, r *http.Request) 
 // `prefix` is the workspace directory: entries are named relative to it, so a
 // download of `dist` arrives as `dist/...` rather than as a pile of loose files.
 func writeArchive(zw *zip.Writer, root, prefix string) (added int, skipped []string) {
+	confined, openErr := os.OpenRoot(prefix)
+	if openErr != nil {
+		return 0, []string{"workspace unavailable"}
+	}
+	defer confined.Close()
 	var (
 		files    int
 		bytesOut int64
@@ -137,7 +143,7 @@ func writeArchive(zw *zip.Writer, root, prefix string) (added int, skipped []str
 		name := d.Name()
 
 		if d.IsDir() {
-			if p != root && archiveSkip[name] {
+			if p != root && (archiveSkip[name] || skipDirName(name)) {
 				return fs.SkipDir
 			}
 			return nil
@@ -169,7 +175,11 @@ func writeArchive(zw *zip.Writer, root, prefix string) (added int, skipped []str
 			return nil
 		}
 
-		if err := addFile(zw, p, relOrBase(p, prefix), info); err != nil {
+		if bytesOut+info.Size() > archiveMaxBytes {
+			capped = true
+			return fs.SkipAll
+		}
+		if err := addFile(zw, confined, relOrBase(p, prefix), info); err != nil {
 			skipped = append(skipped, relOrBase(p, prefix)+" ("+err.Error()+")")
 			return nil
 		}
@@ -178,8 +188,11 @@ func writeArchive(zw *zip.Writer, root, prefix string) (added int, skipped []str
 		added++
 		return nil
 	})
-	if err != nil && capped {
+	if capped {
 		skipped = append(skipped, "the rest of the project")
+	}
+	if err != nil {
+		skipped = append(skipped, err.Error())
 	}
 
 	// The omissions go inside the archive. A silently short download is the
@@ -203,12 +216,19 @@ func writeArchive(zw *zip.Writer, root, prefix string) (added int, skipped []str
 // The timestamp is the workspace's, not the file's, and it is deliberate: zip
 // stores second-resolution local time, so a per-file modtime would make the
 // archive differ on every export and show up as noise in version control.
-func addFile(zw *zip.Writer, onDisk, inArchive string, info fs.FileInfo) error {
-	src, err := os.Open(onDisk)
+func addFile(zw *zip.Writer, root *os.Root, inArchive string, info fs.FileInfo) error {
+	src, err := root.OpenFile(inArchive, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = src.Close() }()
+	actual, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	if !actual.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file")
+	}
 
 	hdr := &zip.FileHeader{
 		Name:     filepath.ToSlash(inArchive),
@@ -219,7 +239,8 @@ func addFile(zw *zip.Writer, onDisk, inArchive string, info fs.FileInfo) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(dst, src)
+	// Copy the listed size only: a file growing during export cannot bypass caps.
+	_, err = io.CopyN(dst, src, info.Size())
 	return err
 }
 

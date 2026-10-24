@@ -10,6 +10,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,7 +27,7 @@ import (
 
 func main() {
 	var (
-		addr     = flag.String("addr", ":8090", "listen address")
+		addr     = flag.String("addr", "127.0.0.1:8090", "listen address")
 		webdir   = flag.String("web", "", "built frontend directory to serve (optional)")
 		sandboxd = flag.String("sandboxd", "", "path to sandboxd (default: located binary)")
 		overlay  = flag.String("harness-overlay", "", "directory of harness manifests to overlay")
@@ -64,18 +65,26 @@ func main() {
 		WorkspacesDir: *workRoot,
 	})
 
+	unlock, err := srv.LockWorkspaceStore()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer unlock()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
-		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shut)
 	}()
@@ -84,6 +93,7 @@ func main() {
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve: %v", err)
 	}
+	<-shutdownDone
 }
 
 const defaultOrigins = "http://localhost:5173,http://127.0.0.1:5173"

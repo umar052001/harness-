@@ -391,8 +391,16 @@ func (c *Client) onPermission(m *message) {
 	}
 	_ = json.Unmarshal(m.Params, &req)
 
+	choice := c.pickOption(req.Options, c.autoApprove)
+	status := "denied"
+	for _, option := range req.Options {
+		if option.OptionID == choice && strings.HasPrefix(option.Kind, "allow") {
+			status = "approved"
+		}
+	}
 	c.emit(Event{
 		Type:       EventPermission,
+		ToolStatus: status,
 		Text:       fmt.Sprintf("%s %s", req.ToolCall.Kind, req.ToolCall.Title),
 		ToolCallID: req.ToolCall.ToolCallID,
 		ToolTitle:  req.ToolCall.Title,
@@ -401,11 +409,14 @@ func (c *Client) onPermission(m *message) {
 		At:         time.Now(),
 	})
 
-	choice := c.pickOption(req.Options, c.autoApprove)
+	outcome := map[string]any{"outcome": "cancelled"}
+	if choice != "" {
+		outcome = map[string]any{"outcome": "selected", "optionId": choice}
+	}
 	_ = c.write(&message{
 		JSONRPC: "2.0",
 		ID:      m.ID,
-		Result:  mustJSON(map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": choice}}),
+		Result:  mustJSON(map[string]any{"outcome": outcome}),
 	})
 }
 

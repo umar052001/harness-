@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -35,18 +37,19 @@ type ActiveRun struct {
 // Serialising them makes the failure mode honest: the second caller is told the
 // first is still going, with enough detail to wait for it.
 type runRegistry struct {
-	mu    sync.Mutex
-	limit int
-	runs  map[string]*ActiveRun
-	order []string
-	seq   int
+	mu      sync.Mutex
+	limit   int
+	runs    map[string]*ActiveRun
+	order   []string
+	seq     int
+	cancels map[string]context.CancelFunc
 }
 
 func newRunRegistry(limit int) *runRegistry {
 	if limit < 1 {
 		limit = 1
 	}
-	return &runRegistry{limit: limit, runs: map[string]*ActiveRun{}}
+	return &runRegistry{limit: limit, runs: map[string]*ActiveRun{}, cancels: map[string]context.CancelFunc{}}
 }
 
 // acquire reserves a slot, returning an opaque token used to release it.
@@ -61,7 +64,7 @@ func (r *runRegistry) acquire(ar ActiveRun) (string, error) {
 		return "", errRunsBusy
 	}
 	r.seq++
-	token := itoa(r.seq)
+	token := strconv.Itoa(r.seq)
 	cp := ar
 	r.runs[token] = &cp
 	r.order = append(r.order, token)
@@ -86,6 +89,7 @@ func (r *runRegistry) release(token string) {
 		return
 	}
 	delete(r.runs, token)
+	delete(r.cancels, token)
 	for i, t := range r.order {
 		if t == token {
 			r.order = append(r.order[:i], r.order[i+1:]...)
@@ -116,18 +120,20 @@ func (r *runRegistry) busy() bool {
 	return len(r.runs) >= r.limit
 }
 
-// itoa is a tiny dependency-free integer formatter; strconv is overkill for a
-// monotonic per-server counter.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+func (r *runRegistry) setCancel(token string, cancel context.CancelFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cancels[token] = cancel
+}
+
+func (r *runRegistry) cancel(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for token, run := range r.runs {
+		if run.RunID == id && r.cancels[token] != nil {
+			r.cancels[token]()
+			return true
+		}
 	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+	return false
 }

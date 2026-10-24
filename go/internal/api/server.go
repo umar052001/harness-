@@ -16,7 +16,9 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -62,12 +64,14 @@ type Options struct {
 
 // Server is an HTTP server for the ai-os control plane.
 type Server struct {
-	run        Runner
-	sandboxBin string
-	planner    *planner.Planner
-	origins    map[string]bool
-	webDir     string
-	heartbeat  time.Duration
+	run          Runner
+	sandboxBin   string
+	planner      *planner.Planner
+	origins      map[string]bool
+	webDir       string
+	heartbeat    time.Duration
+	sandboxReady bool
+	sandboxError string
 	// store owns run workspaces. It is nil only when the root could not be
 	// prepared, in which case runs still work but their output is temporary.
 	store *WorkspaceStore
@@ -107,6 +111,15 @@ func New(run Runner, opt Options) *Server {
 	}
 	if store != nil {
 		s.publishIndex = newPublishIndex(store.Root())
+	}
+	if opt.SandboxBinary != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		output, probeErr := exec.CommandContext(ctx, opt.SandboxBinary, "probe").CombinedOutput()
+		s.sandboxReady = probeErr == nil
+		if probeErr != nil {
+			s.sandboxError = strings.TrimSpace(string(output)) + ": " + probeErr.Error()
+		}
 	}
 	return s
 }
@@ -164,6 +177,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/narrate", s.handleNarrate)
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
 	mux.HandleFunc("GET /api/runs/active", s.handleActiveRuns)
+	mux.HandleFunc("POST /api/runs/{id}/stop", s.handleStopRun)
 	mux.HandleFunc("GET /api/workspace/{id}", s.handleWorkspaceList)
 	mux.HandleFunc("GET /api/workspace/{id}/events", s.handleWorkspaceEvents)
 	mux.HandleFunc("GET /api/workspace/{id}/raw/{path...}", s.handleWorkspaceRaw)
@@ -209,7 +223,8 @@ type runRequest struct {
 // way to learn nothing twice: a client that drops the stream can ask again, but
 // there is no history endpoint to reconcile against.
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 		return
@@ -222,6 +237,25 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
+	}
+	if req.TimeoutSec < 0 || req.TimeoutSec > 1800 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "time limit must be between 1 and 1800 seconds (0 uses 600)"})
+		return
+	}
+	if len(req.Models) > 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "choose one model per run"})
+		return
+	}
+	if _, err := s.run.Registry().Lookup(req.HarnessID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if s.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "workspace storage unavailable: " + s.storeErr})
+		return
+	}
+	if req.HarnessID == "opencode" && (len(req.Models) == 0 || strings.TrimSpace(req.Models[0]) == "") {
+		req.Models = []string{"opencode/big-pickle"}
 	}
 
 	// Take a concurrency slot before anything durable is created. Refusing here
@@ -276,6 +310,33 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if runID != "" {
 		s.active.identify(token, runID, runReq.Workspace)
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), runReq.Timeout)
+	defer cancel()
+	s.active.setCancel(token, cancel)
+	meta := RunMetadata{Prompt: req.Prompt, HarnessID: req.HarnessID, Status: "running", StartedAt: time.Now()}
+	if len(req.Models) > 0 {
+		meta.Model = req.Models[0]
+	}
+	if err := s.store.saveMetadata(runID, meta); err != nil {
+		http.Error(w, "could not save run: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	logPath, _ := s.store.eventLogPath(runID)
+	transcript, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		http.Error(w, "could not open transcript: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer transcript.Close()
+	var recordMu sync.Mutex
+	record := func(payload []byte) {
+		recordMu.Lock()
+		defer recordMu.Unlock()
+		if _, err := transcript.Write(append(payload, '\n')); err != nil {
+			log.Printf("transcript %s: %v", runID, err)
+			cancel()
+		}
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -294,8 +355,6 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// A heartbeat keeps intermediaries from treating a silent agent as a dead
 	// connection, and gives a reader the same signal a TCP keepalive does. It is
 	// a comment per spec, invisible to an event parser.
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -319,11 +378,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		})
 		if merr == nil {
 			sink.frame("run.assigned", string(payload))
-			s.persistEvent(runID, payload)
+			record(payload)
 		}
 	}
 
 	err = s.run.Run(ctx, runReq, func(ev runner.Event) {
+		// Terminal state is emitted only after the runner has cleaned up processes.
+		if ev.Kind == runner.KindRunFinished {
+			return
+		}
 		payload, merr := json.Marshal(ev)
 		if merr != nil {
 			return
@@ -335,8 +398,30 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// The same bytes go to the transcript the history endpoint replays.
 		// Persisting here, rather than reconstructing later, is what keeps the
 		// live view and the recorded one identical.
-		s.persistEvent(runID, payload)
+		record(payload)
 	})
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	finished := time.Now()
+	meta.FinishedAt = &finished
+	meta.Status = "completed"
+	if err != nil {
+		meta.Status, meta.Error = "failed", err.Error()
+		if errors.Is(err, context.Canceled) {
+			meta.Status, meta.Error = "cancelled", "Run stopped. Files already written are saved."
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			meta.Status, meta.Error = "timed_out", "Time limit reached. Files already written are saved."
+		}
+	}
+	if saveErr := s.store.saveMetadata(runID, meta); saveErr != nil {
+		log.Printf("save run %s: %v", runID, saveErr)
+	}
+	terminal, _ := json.Marshal(runner.Event{Kind: runner.KindRunFinished, At: finished, Text: meta.Status,
+		Data: json.RawMessage(mustJSONStatus(err == nil, meta.Status, meta.Error))})
+	record(terminal)
+	sink.frame(runner.KindRunFinished, string(terminal))
 
 	end := map[string]any{"ok": err == nil}
 	if err != nil {
@@ -425,6 +510,7 @@ func (s *sseSink) raw(b string) {
 	// A closed connection makes Write fail, which is not a problem; a recycled
 	// writer makes it panic, which is.
 	defer func() { _ = recover() }()
+	_ = http.NewResponseController(s.w).SetWriteDeadline(time.Now().Add(10 * time.Second))
 	_, _ = io.WriteString(s.w, b)
 	if s.flusher != nil {
 		s.flusher.Flush()
@@ -443,15 +529,15 @@ func (s *sseSink) close() {
 // is the difference between a dashboard that renders and a run that can start.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	bin := s.sandboxBin
-	_, statErr := os.Stat(bin)
 	body := map[string]any{
-		"ok":          true,
-		"sandboxd":    bin,
-		"sandboxdOk":  statErr == nil,
-		"plannerOk":   s.planner != nil && s.planner.Configured(),
-		"artifactsOk": s.store != nil,
-		"activeRuns":  len(s.active.list()),
-		"maxRuns":     s.active.limit,
+		"ok":           true,
+		"sandboxd":     bin,
+		"sandboxdOk":   s.sandboxReady,
+		"sandboxError": s.sandboxError,
+		"plannerOk":    s.planner != nil && s.planner.Configured(),
+		"artifactsOk":  s.store != nil,
+		"activeRuns":   len(s.active.list()),
+		"maxRuns":      s.active.limit,
 	}
 	if s.store != nil {
 		body["workspaces"] = s.store.Root()
@@ -509,7 +595,34 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": s.store.Runs(limit)})
+	runs := s.store.Runs(limit)
+	live := map[string]bool{}
+	for _, run := range s.active.list() {
+		live[run.RunID] = true
+	}
+	for i := range runs {
+		if runs[i].Status == "running" && !live[runs[i].ID] {
+			runs[i].Status = "interrupted"
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+func mustJSONStatus(ok bool, status, reason string) []byte {
+	raw, _ := json.Marshal(map[string]any{"ok": ok, "status": status, "error": reason})
+	return raw
+}
+
+func (s *Server) handleStopRun(w http.ResponseWriter, r *http.Request) {
+	if !validID(r.PathValue("id")) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid run id"})
+		return
+	}
+	if !s.active.cancel(r.PathValue("id")) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "run is no longer active"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"stopping": true})
 }
 
 // handleActiveRuns answers "what is running right now", the question a list of
@@ -758,6 +871,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
+		if origin != "" && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			u, err := url.Parse(origin)
+			sameHost := err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host == r.Host
+			if !sameHost && !s.origins[origin] {
+				writeJSON(w, http.StatusForbidden, map[string]any{"error": "origin is not allowed to control runs"})
+				return
+			}
+		}
 		if origin != "" && s.origins[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")

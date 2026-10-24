@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/umar052001/ai-os/go/internal/acp"
@@ -132,6 +133,10 @@ func (r *Runner) Run(ctx context.Context, req Request, emit func(Event)) error {
 	defer cancel()
 
 	em := &emitter{emit: emit}
+	defer em.finish()
+	if h.ID == "opencode" && len(req.Models) == 0 {
+		req.Models = []string{"opencode/big-pickle"}
+	}
 	em.send(KindHarness, h.Name, map[string]any{
 		"id": h.ID, "kind": h.Kind, "cost": h.Cost, "license": h.License,
 		"command": h.Command, "args": h.Args,
@@ -150,6 +155,11 @@ func (r *Runner) Run(ctx context.Context, req Request, emit func(Event)) error {
 	// them a local variable while the request still says "" would send the agent
 	// to the system temp directory instead of the run's directory.
 	req.Workspace = ws
+	if h.ID == "opencode" {
+		if err := prepareOpenCode(ws, req.Models[0]); err != nil {
+			return err
+		}
+	}
 
 	switch h.Kind {
 	case harness.KindACP:
@@ -232,13 +242,16 @@ func (r *Runner) runACP(ctx context.Context, h *harness.Harness, req Request, ws
 // closing: it blocks until every sandbox event (enforcement, exit) has been
 // delivered, so a finished run really is finished.
 func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, ws string, env []string, em *emitter) (*acp.Client, func() <-chan struct{}, error) {
-	args := h.Args
-	models := req.Models
+	args := h.Argv("", req.Models)
+	model := ""
+	if h.ID == "opencode" && len(req.Models) > 0 {
+		model = req.Models[0]
+	}
 
 	if !r.sandboxed {
 		client, err := acp.Connect(ctx, h.Command, args, env, acp.Options{
 			Cwd: ws, AutoApprove: req.AutoApprove, OnEvent: em.acpSink(),
-			RequestTimeout: req.Timeout,
+			RequestTimeout: 90 * time.Second, Model: model,
 		})
 		if err != nil {
 			return nil, nil, err
@@ -249,23 +262,6 @@ func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, w
 			return done
 		}, nil
 	}
-
-	// Under the sandbox the agent is launched by sandboxd, so ACP's stdio
-	// transport is the sandbox's stdio. The proxy is a thin JSON-RPC pipe between
-	// the two: it relays frames in both directions and never parses them, so no
-	// part of the agent's conversation is readable or alterable by the control
-	// plane on the way through.
-	//
-	// The proxy lives inside the workspace, not in the system temp directory.
-	// Landlock grants the workspace read-write and everything else read-only, so
-	// a script in /tmp is unreadable from inside the sandbox however writable it
-	// is from outside - the agent would fail with ENOENT on a file that plainly
-	// exists. Writing it where the agent can reach it is the whole fix.
-	proxy := filepath.Join(ws, ".ai-os-acp-proxy.js")
-	if err := os.WriteFile(proxy, []byte(acpProxyScript), 0o600); err != nil {
-		return nil, nil, fmt.Errorf("runner: writing acp proxy: %w", err)
-	}
-	defer func() { _ = os.Remove(proxy) }()
 
 	// The pipes are created before the sandbox is launched because exec.Cmd fixes
 	// a process's stdio at Start; there is no way to attach them afterwards.
@@ -280,10 +276,8 @@ func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, w
 		return nil, nil, err
 	}
 
-	// node runs the proxy and the harness is itself a node program, so the node
-	// runtime has to be reachable inside the sandbox.
-	agentArgs := h.Argv("", models)
-	argv := append([]string{"node", proxy, h.Command}, agentArgs...)
+	// Inherited pipes already carry ACP unchanged; a Node relay adds no value.
+	argv := append([]string{h.Command}, args...)
 
 	// The agent's own diagnostics are forwarded as output events rather than
 	// parked in a buffer. A failed run is exactly when a user needs to see what
@@ -294,6 +288,7 @@ func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, w
 
 	stream, err := r.sandbox.Stream(ctx, &sbx.StreamRequest{
 		Workspace: ws,
+		TimeoutMs: int(req.Timeout.Milliseconds()),
 		Argv:      argv,
 		Env:       env,
 		// Network is granted only when the harness manifest says it needs it, and
@@ -329,6 +324,9 @@ func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, w
 		_ = stdoutW.Close()
 		return nil, nil, fmt.Errorf("runner: starting sandboxed agent: %w", err)
 	}
+	// Only the child may keep these ends open, otherwise an agent crash has no EOF.
+	_ = stdinR.Close()
+	_ = stdoutW.Close()
 
 	// Enforcement evidence is reported before the prompt, not after: a run that
 	// ends with a violation report is a run that was already unsafe.
@@ -360,8 +358,8 @@ func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, w
 
 	client, err := acp.ConnectIO(ctx, h.Name, stdinR, stdinW, stdoutR, agentStderr, acp.Options{
 		Cwd: ws, AutoApprove: req.AutoApprove, OnEvent: em.acpSink(),
-		RequestTimeout: req.Timeout,
-		OnClose:        func() error { return stream.Close() },
+		RequestTimeout: 90 * time.Second, Model: model,
+		OnClose: func() error { return stream.Close() },
 	})
 	if err != nil {
 		_ = stream.Close()
@@ -426,6 +424,10 @@ func (l *lineEmitter) Write(p []byte) (int, error) {
 			continue
 		}
 		l.cur = append(l.cur, b)
+		if len(l.cur) >= 64*1024 {
+			l.emit(string(l.cur))
+			l.cur = l.cur[:0]
+		}
 	}
 	return len(p), nil
 }
@@ -444,7 +446,39 @@ func (r *Runner) runCLI(ctx context.Context, h *harness.Harness, req Request, ws
 	if h.PromptStdin {
 		stdin = strings.NewReader(req.Prompt)
 	}
+	if r.sandboxed {
+		output := &lineEmitter{emit: em.outputLine("stdout")}
+		stream, err := r.sandbox.Stream(ctx, &sbx.StreamRequest{
+			Workspace: ws, Argv: append([]string{h.Command}, argv...),
+			Env: r.childEnv(h, req), Stdio: sbx.StdioPipe,
+			Stdin: stdin, Stdout: output, Stderr: &lineEmitter{emit: em.outputLine("stderr")},
+			AllowNet: h.NeedsNetwork != "", NetWhy: netWhy(h),
+			ReadPaths: append(append(nodeRuntimeDirs(), "/proc"), resolvReadPaths()...),
+			TimeoutMs: int(req.Timeout.Milliseconds()),
+		})
+		if err != nil {
+			return err
+		}
+		defer stream.Close()
+		for ev := range stream.Events() {
+			if ev.Type == "run.started" || ev.Type == "enforcement" {
+				em.send(KindSandbox, "sandbox policy", ev)
+			}
+		}
+		code := stream.Wait(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if code != 0 {
+			return fmt.Errorf("agent exited with code %d", code)
+		}
+		em.send(KindRunFinished, "done", map[string]any{"ok": true})
+		return nil
+	}
 	cmd := exec.CommandContext(ctx, h.Command, argv...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 3 * time.Second
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.Dir = ws
 	cmd.Env = r.childEnv(h, req)
 	cmd.Stdin = stdin
@@ -473,8 +507,11 @@ func (r *Runner) runCLI(ctx context.Context, h *harness.Harness, req Request, ws
 		done <- sc.Err()
 	}()
 
+	readErr := <-done
 	waitErr := cmd.Wait()
-	<-done
+	if readErr != nil {
+		return readErr
+	}
 	if waitErr != nil {
 		em.send(KindError, waitErr.Error(), nil)
 		em.send(KindRunFinished, "failed", map[string]any{"ok": false})
@@ -618,8 +655,8 @@ func (e *emitter) finish() {
 
 func (e *emitter) send(kind, text string, data any) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.done {
-		e.mu.Unlock()
 		return
 	}
 	e.seq++
@@ -630,7 +667,6 @@ func (e *emitter) send(kind, text string, data any) {
 		}
 	}
 	emit := e.emit
-	e.mu.Unlock()
 	if emit != nil {
 		emit(ev)
 	}
@@ -666,7 +702,8 @@ func (e *emitter) acpSink() func(acp.Event) {
 			})
 		case acp.EventPermission:
 			e.send(KindPermission, ev.Text, map[string]any{
-				"id": ev.ToolCallID, "title": ev.ToolTitle, "toolKind": ev.ToolKind,
+				"status": ev.ToolStatus,
+				"id":     ev.ToolCallID, "title": ev.ToolTitle, "toolKind": ev.ToolKind,
 				"tool": ev.Tool.Name, "command": ev.Tool.Command,
 			})
 		case acp.EventPlan:

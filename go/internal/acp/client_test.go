@@ -98,13 +98,17 @@ func runFakeAgent(mode string) {
 			}
 			sid = "sess-1"
 			send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{
-				"sessionId": sid,
+				"sessionId":     sid,
+				"configOptions": []any{map[string]any{"id": "model", "category": "model", "currentValue": "other"}},
 				"modes": map[string]any{
 					"availableModes": []any{map[string]any{"id": "default", "name": "Default"}},
 					"currentModeId":  "default",
 				},
 			}})
 
+		case "session/set_config_option":
+			report("model-selection %s", string(m.Params))
+			send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{}})
 		case "session/prompt":
 			if mode == "spec-shape" {
 				// The reference-spec dialect: a "type" discriminator and a message
@@ -133,6 +137,12 @@ func runFakeAgent(mode string) {
 							"message": map[string]any{"role": "assistant",
 								"content": []any{map[string]any{"type": "text", "text": fmt.Sprintf("step %d", i)}}}}})
 				}
+				send(map[string]any{"jsonrpc": "2.0", "id": m.ID,
+					"result": map[string]any{"stopReason": "end_turn"}})
+				continue
+			}
+			if mode == "quiet-generation" {
+				time.Sleep(600 * time.Millisecond)
 				send(map[string]any{"jsonrpc": "2.0", "id": m.ID,
 					"result": map[string]any{"stopReason": "end_turn"}})
 				continue
@@ -443,12 +453,25 @@ func TestUnknownNotificationIsTolerated(t *testing.T) {
 	}
 }
 
+func TestQuietPromptUsesRunBudget(t *testing.T) {
+	c, _ := connectFake(t, "quiet-generation", nil)
+	c.requestTimeout = 100 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result, err := c.Prompt(ctx, "generate a page")
+	if err != nil || result.StopReason != "end_turn" {
+		t.Fatalf("quiet generation was interrupted: result=%+v err=%v", result, err)
+	}
+}
+
 func TestPromptTimeoutReturns(t *testing.T) {
 	c, _ := connectFake(t, "stall", nil)
 	c.requestTimeout = 400 * time.Millisecond
 
 	start := time.Now()
-	_, err := c.Prompt(context.Background(), "hello")
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	_, err := c.Prompt(ctx, "hello")
 	if err == nil {
 		t.Fatal("expected a timeout error")
 	}
@@ -462,7 +485,7 @@ func TestUnansweredRequestTimesOut(t *testing.T) {
 	c.requestTimeout = 400 * time.Millisecond
 
 	start := time.Now()
-	_, err := c.Prompt(context.Background(), "hello")
+	err := c.call(t.Context(), "unknown/control", nil, nil)
 	if err == nil {
 		t.Fatal("expected a timeout when the agent never answers")
 	}

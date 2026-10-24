@@ -465,8 +465,7 @@ func TestRunBadPrompt(t *testing.T) {
 	}
 }
 
-// TestRunUnknownHarness checks that a run against a harness id that does not
-// exist still surfaces an error on the stream instead of an empty stream.
+// Invalid harnesses fail before a workspace or event stream is created.
 func TestRunUnknownHarness(t *testing.T) {
 	s := newTestServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -479,16 +478,12 @@ func TestRunUnknownHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		b, _ := io.ReadAll(res.Body)
-		t.Fatalf("status %d: %s", res.StatusCode, b)
-	}
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `event: stream.end`) || !strings.Contains(string(body), `"ok":false`) {
-		t.Errorf("expected an explicit failed stream end, got:\n%s", body)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 before stream creation, got %d: %s", res.StatusCode, body)
 	}
 	if !strings.Contains(string(body), "unknown harness") {
 		t.Errorf("expected the harness error on the stream, got:\n%s", body)
