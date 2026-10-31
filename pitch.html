@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>harness++ · Open-weight first</title>
+  <style>
+    :root { --bg:#111713; --panel:#1a231c; --ink:#f2f0e7; --muted:#b5bcae; --green:#cef296; --line:#344133; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+    button,a { -webkit-tap-highlight-color:transparent; }
+    button { font:inherit; cursor:pointer; }
+    button:disabled { opacity:.3; cursor:default; }
+    a { color:inherit; }
+    :focus-visible { outline:3px solid var(--green); outline-offset:5px; }
+    header,footer { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:20px clamp(24px,5vw,84px); }
+    header { border-bottom:1px solid var(--line); }
+    .brand { font-weight:800; font-size:22px; letter-spacing:-1px; }
+    .brand span,.accent { color:var(--green); }
+    .meta,.eyebrow,.time { font-size:12px; letter-spacing:.12em; text-transform:uppercase; }
+    .meta,.time { color:var(--muted); }
+    main { max-width:1500px; margin:auto; }
+    .slide { min-height:calc(100svh - 155px); padding:clamp(32px,6vh,80px) clamp(24px,7vw,110px); display:flex; flex-direction:column; justify-content:center; }
+    .slide[hidden] { display:none; }
+    .eyebrow { color:var(--green); margin:0 0 20px; font-weight:700; }
+    h1,h2 { font-size:clamp(38px,5.7vw,82px); line-height:1.03; letter-spacing:-.055em; margin:0; max-width:1100px; font-weight:750; text-wrap:balance; }
+    h1 { font-size:clamp(48px,7.4vw,108px); }
+    .lead { font-size:clamp(19px,2.1vw,29px); line-height:1.45; color:var(--muted); max-width:850px; margin:26px 0 0; text-wrap:pretty; }
+    .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:38px; }
+    .card { border:1px solid var(--line); border-radius:18px; padding:25px; background:var(--panel); }
+    .number { color:var(--green); font-size:13px; display:block; margin-bottom:25px; }
+    h3 { font-size:clamp(20px,2vw,28px); line-height:1.2; letter-spacing:-.025em; margin:0 0 12px; }
+    .card p { color:var(--muted); margin:0; font-size:17px; line-height:1.5; }
+    .takeaway { margin:28px 0 0; font-size:clamp(17px,1.7vw,23px); line-height:1.45; }
+    .footnote { color:var(--muted); font-size:13px; line-height:1.5; margin:20px 0 0; max-width:950px; }
+    .boundary { border:1px dashed #769263; border-radius:22px; padding:25px; margin-top:32px; }
+    .boundary-label { color:var(--green); font-size:12px; text-transform:uppercase; letter-spacing:.13em; margin:0 0 18px; }
+    .map { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; align-items:center; gap:18px; }
+    .map .card { min-height:135px; }
+    .arrow { color:var(--green); font-size:28px; }
+    .comparison { margin-top:34px; display:grid; grid-template-columns:1fr 1.2fr; gap:22px; }
+    .comparison .card:last-child { border-color:#799862; }
+    .comparison ul { padding-left:20px; margin:20px 0 0; color:var(--muted); font-size:clamp(17px,1.7vw,23px); line-height:1.7; }
+    .comparison .card:last-child li { color:var(--ink); }
+    .links { display:flex; flex-wrap:wrap; gap:12px; margin-top:30px; }
+    .link,.control { border:1px solid var(--line); border-radius:9px; background:none; color:var(--ink); text-decoration:none; padding:11px 16px; font-size:14px; }
+    .link.primary { background:var(--green); color:var(--bg); border-color:var(--green); font-weight:700; }
+    footer { border-top:1px solid var(--line); }
+    .controls { display:flex; gap:8px; align-items:center; }
+    .counter { min-width:54px; text-align:center; color:var(--muted); font-size:13px; }
+    .notes { margin:0 clamp(24px,5vw,84px) 20px; padding:18px 22px; border:1px solid var(--line); border-radius:12px; color:var(--muted); line-height:1.6; font-size:15px; }
+    .notes strong { color:var(--green); }
+    .notes p { margin:8px 0 0; }
+    @media (max-width:700px) {
+      header,footer { padding:16px 22px; }
+      .meta { font-size:10px; letter-spacing:.05em; }
+      .slide { min-height:calc(100svh - 143px); padding:34px 24px; }
+      .cards,.comparison { grid-template-columns:1fr; gap:12px; margin-top:26px; }
+      .card { padding:20px; }
+      .number { margin-bottom:12px; }
+      .map { grid-template-columns:1fr; gap:10px; }
+      .map .card { min-height:0; }
+      .arrow { text-align:center; transform:rotate(90deg); line-height:1; }
+      .time { display:none; }
+      .control { padding:11px 13px; }
+    }
+    @media print {
+      :root { --bg:white; --panel:#f5f7f1; --ink:#152019; --muted:#465343; --green:#39651b; --line:#bdc8b6; }
+      body { background:white; }
+      header,footer,.notes,.links { display:none !important; }
+      .slide,.slide[hidden] { display:flex !important; min-height:95vh; break-after:page; padding:35px; }
+      .slide:last-child { break-after:auto; }
+      h1,h2 { font-size:54px; }
+      .cards { gap:12px; }
+      .card { padding:18px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">harness<span>++</span></div>
+    <div class="meta">Open-weight first · 2:40 including demo</div>
+  </header>
+  <main aria-label="Pitch slides">
+    <section class="slide" aria-labelledby="title-1" data-time="20 seconds" data-notes="AI can write code quickly. But getting a useful app still means choosing models, finding the right code, fixing errors and checking that it runs. harness++ brings those steps together, with open-weight AI doing the early work.">
+      <p class="eyebrow">01 / The problem</p>
+      <h1 id="title-1" tabindex="-1">Getting code is easy.<br><span class="accent">Getting a working app isn’t.</span></h1>
+      <p class="lead">People still juggle model choices, broken builds, running services and usage limits.</p>
+      <p class="takeaway">harness++ turns a plain-English request into a guided, checked app-building workflow.</p>
+    </section>
+
+    <section class="slide" hidden aria-labelledby="title-2" data-time="25 seconds" data-notes="Our main idea is open-weight first. We use Gemma in more than one place: to understand the request, plan the work and build the first version. GPT-6.1 Sol handles follow-up work and repairs when enabled. We want less dependence on premium models, not a premium model doing every step.">
+      <p class="eyebrow">02 / The main idea</p>
+      <h2 id="title-2" tabindex="-1">Open-weight AI.<br><span class="accent">More than one job.</span></h2>
+      <div class="cards">
+        <article class="card"><span class="number">GEMMA / 01</span><h3>Understand the need</h3><p>Turn a simple request into clear requirements.</p></article>
+        <article class="card"><span class="number">GEMMA / 02</span><h3>Plan the work</h3><p>Break the job into steps and decide what to check.</p></article>
+        <article class="card"><span class="number">GEMMA / 03</span><h3>Build the first version</h3><p>Write the initial code inside a restricted workspace.</p></article>
+      </div>
+      <p class="takeaway"><span class="accent">Gemma first.</span> GPT-6.1 Sol for follow-up work and fixes, when allowed.</p>
+      <p class="footnote">Open-weight does not mean free cloud use. The goal is less unnecessary premium-model use; savings are not yet benchmarked.</p>
+    </section>
+
+    <section class="slide" hidden aria-labelledby="title-3" data-time="25 seconds" data-notes="Graphify gives the agent a map of the code: which parts connect and where to look. Both making the map and looking it up happen inside the sandbox. The agent must look up the relevant code before editing. This helps it work with useful context instead of guessing. The sandbox limits local file access; it does not make cloud AI private or offline.">
+      <p class="eyebrow">03 / Understand before changing</p>
+      <h2 id="title-3" tabindex="-1">Give the AI a map.<br><span class="accent">And a place to work safely.</span></h2>
+      <div class="boundary">
+        <p class="boundary-label">Inside the project sandbox · a restricted workspace</p>
+        <div class="map">
+          <div class="card"><h3>Project code</h3><p>The app’s files and functions.</p></div>
+          <span class="arrow" aria-hidden="true">→</span>
+          <div class="card"><h3>Graphify map</h3><p>Shows how the parts connect.</p></div>
+          <span class="arrow" aria-hidden="true">→</span>
+          <div class="card"><h3>Targeted lookup</h3><p>The agent checks relevant code before edits.</p></div>
+        </div>
+      </div>
+      <p class="footnote">Mapping needs no extra AI call. The map refreshes between work stages. Model requests still use cloud services and can include project code.</p>
+    </section>
+
+    <section class="slide" hidden aria-labelledby="title-4" data-time="20 seconds" data-notes="This is more than choosing a model and asking for code. We add an open-weight-first plan, a code map, controlled repairs and visible usage. Backend apps are started in the sandbox and their declared checks are run. Ponytail also guides the agent to keep changes simple. The value is a more controlled path to a usable app—not a claim that AI never makes mistakes.">
+      <p class="eyebrow">04 / Why it is worth building</p>
+      <h2 id="title-4" tabindex="-1">Not just more AI.<br><span class="accent">A better way to use it.</span></h2>
+      <div class="comparison">
+        <article class="card"><h3>A basic coding setup</h3><ul><li>Pick a model and ask for code.</li><li>Work out what failed.</li><li>Check and run the result yourself.</li></ul></article>
+        <article class="card"><h3>What harness++ adds</h3><ul><li>Open-weight planning and first build.</li><li>A code map and restricted workspace.</li><li>Bounded repairs, app checks and model usage.</li></ul></article>
+      </div>
+      <p class="footnote">Ponytail encourages simple changes. Checks can miss bugs; static-page checks are more limited. This compares with a basic setup, not every existing coding tool.</p>
+    </section>
+
+    <section class="slide" hidden aria-labelledby="title-5" data-time="60-second demo + 10-second close" data-notes="Before presenting: start the saved wholesale app and prepare one product and customer. Do not wait for a full AI build on stage. In the demo, create a draft order, confirm it and show stock being reserved. Then switch to the dashboard to show the plan, checks and model usage. Close with: Open-weight AI for the first mile. A controlled path to a working app.">
+      <p class="eyebrow">05 / A useful app, not just a code sample</p>
+      <h2 id="title-5" tabindex="-1">Let’s run<br><span class="accent">a small wholesale business.</span></h2>
+      <div class="cards">
+        <article class="card"><span class="number">DEMO / 01</span><h3>Create an order</h3><p>Choose a customer, products and quantities.</p></article>
+        <article class="card"><span class="number">DEMO / 02</span><h3>Watch stock update</h3><p>Confirm the order and reserve its stock.</p></article>
+        <article class="card"><span class="number">DEMO / 03</span><h3>Show the evidence</h3><p>Open the plan, check results and model usage.</p></article>
+      </div>
+      <div class="links">
+        <a class="link primary" href="http://c4fd2669471c.localhost:8091" target="_blank" rel="noopener">Open wholesale demo ↗</a>
+        <a class="link" href="http://127.0.0.1:8091" target="_blank" rel="noopener">Open harness++ dashboard ↗</a>
+      </div>
+      <p class="takeaway">Open-weight AI for the first mile.<br><span class="accent">A controlled path to a working app.</span></p>
+      <p class="footnote">Demo links need the local server and saved app running. The deck itself works offline.</p>
+    </section>
+  </main>
+  <aside id="notes" class="notes" hidden aria-label="Presenter notes"></aside>
+  <footer>
+    <button id="notes-toggle" class="control" type="button" aria-controls="notes" aria-expanded="false">Presenter notes · N</button>
+    <span id="time" class="time"></span>
+    <nav class="controls" aria-label="Slide navigation">
+      <button id="previous" class="control" type="button" aria-label="Previous slide">←</button>
+      <span id="counter" class="counter" aria-live="polite"></span>
+      <button id="next" class="control" type="button" aria-label="Next slide">→</button>
+    </nav>
+  </footer>
+  <script>
+    const slides = [...document.querySelectorAll('.slide')];
+    const previous = document.querySelector('#previous');
+    const next = document.querySelector('#next');
+    const notes = document.querySelector('#notes');
+    const notesToggle = document.querySelector('#notes-toggle');
+    let current = 0;
+
+    function show(index, focus = false) {
+      current = Math.max(0, Math.min(slides.length - 1, index));
+      slides.forEach((slide, i) => { slide.hidden = i !== current; });
+      document.querySelector('#counter').textContent = `${current + 1} / ${slides.length}`;
+      document.querySelector('#time').textContent = slides[current].dataset.time;
+      notes.replaceChildren();
+      const label = document.createElement('strong');
+      label.textContent = slides[current].dataset.time;
+      const speech = document.createElement('p');
+      speech.textContent = slides[current].dataset.notes;
+      notes.append(label, speech);
+      previous.disabled = current === 0;
+      next.disabled = current === slides.length - 1;
+      history.replaceState(null, '', `#${current + 1}`);
+      if (focus) slides[current].querySelector('h1,h2').focus({ preventScroll: true });
+      window.scrollTo(0, 0);
+    }
+
+    function toggleNotes() {
+      notes.hidden = !notes.hidden;
+      notesToggle.setAttribute('aria-expanded', String(!notes.hidden));
+    }
+
+    previous.addEventListener('click', () => show(current - 1, true));
+    next.addEventListener('click', () => show(current + 1, true));
+    notesToggle.addEventListener('click', toggleNotes);
+    document.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+      if (event.key === ' ' && event.target.closest('a,button,summary')) return;
+      if (['ArrowRight','PageDown',' '].includes(event.key)) { event.preventDefault(); show(current + 1, true); }
+      else if (['ArrowLeft','PageUp'].includes(event.key)) { event.preventDefault(); show(current - 1, true); }
+      else if (event.key === 'Home') { event.preventDefault(); show(0, true); }
+      else if (event.key === 'End') { event.preventDefault(); show(slides.length - 1, true); }
+      else if (event.key.toLowerCase() === 'n') toggleNotes();
+    });
+    const requested = Number(location.hash.slice(1));
+    show(Number.isInteger(requested) && requested > 0 ? requested - 1 : 0);
+    console.assert(slides.length === 5 && slides.every(slide => slide.querySelector('h1,h2')), 'Expected five titled pitch slides.');
+  </script>
+</body>
+</html>
