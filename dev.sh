@@ -2,7 +2,7 @@
 #
 # Build everything and start the control plane. One command, from a clean clone.
 #
-#   ./dev.sh            listen on 127.0.0.1:8090
+#   ./dev.sh            listen on 127.0.0.1:8091
 #   ./dev.sh --addr :9000
 #
 # The three builds are ordered by cost: cargo is incremental, the frontend is a
@@ -21,7 +21,7 @@ for tool in cargo npm go; do
   fi
 done
 
-addr="127.0.0.1:8090"
+addr="127.0.0.1:8091"
 if [[ "${1:-}" == "--addr" && -n "${2:-}" ]]; then
   addr="$2"
 fi
@@ -37,10 +37,10 @@ fi
 
 echo "==> building server (go)"
 mkdir -p .build
-(cd go && go build -o ../.build/ai-os-server ./cmd/server)
+(cd go && go build -o ../.build/harness-server ./cmd/server)
 
-echo "==> ai-os on http://$addr"
-exec ./.build/ai-os-server \
+echo "==> harness++ on http://$addr"
+exec ./.build/harness-server \
   -addr "$addr" \
   -web "$root/web/dist" \
   -sandboxd "$root/rust/sandboxd/target/release/sandboxd"

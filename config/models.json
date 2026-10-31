@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-31",
+  "router": "ollama/gemma4:cloud",
+  "policy": {"maxStages": 3, "maxAttemptsPerStage": 2, "preferOpenWeights": true},
+  "models": [
+    {
+      "id": "ollama/gemma4:cloud", "provider": "ollama", "providerModelId": "gemma4:cloud", "upstreamModelId": "gemma4:31b",
+      "enabled": true, "openWeights": true, "hostedInferenceFree": false,
+      "auth": "Existing Ollama daemon sign-in; private key stays on host; loopback API relays to https://ollama.com",
+      "capabilities": ["completion", "tools", "thinking", "vision"],
+      "tasks": ["planning", "routing", "implementation", "testing", "review"],
+      "limitations": ["Account credit balance and rate limits are not exposed here", "No guarantee of correctness", "Output limit not verified"],
+      "limits": {"context": 262144, "output": null},
+      "price": {"currency": "USD", "inputPerMillion": 0.14, "cacheReadPerMillion": 0.05, "outputPerMillion": 0.40, "billing": "Account admits Gemma requests; paid-rate equivalent shown, actual free/subscription consumption unknown", "freeTier": "Account error on Kimi explicitly recommends Gemma as Free-plan eligible; numeric allowance unknown. Public pricing describes newer credit plans."},
+      "priority": 1, "fallback": ["ollama/kimi-k2.6:cloud", "openai/gpt-6.1-sol"],
+      "sources": ["https://docs.ollama.com/cloud", "https://ollama.com/library/gemma4", "https://ollama.com/pricing", "local /api/tags and /api/show, 2026-10-31"]
+    },
+    {
+      "id": "ollama/kimi-k2.6:cloud", "provider": "ollama", "providerModelId": "kimi-k2.6:cloud", "upstreamModelId": "kimi-k2.6",
+      "enabled": false, "openWeights": true, "hostedInferenceFree": false,
+      "auth": "Existing Ollama daemon sign-in; loopback relay",
+      "capabilities": ["completion", "tools", "thinking", "vision"],
+      "tasks": ["implementation", "debugging", "testing", "review", "research"],
+      "limitations": ["Disabled: live OpenCode request rejected by the account as not included in free usage on 2026-10-31", "Do not enable without confirming existing credits or plan access"],
+      "limits": {"context": null, "output": null},
+      "price": {"currency": "USD", "inputPerMillion": 0.95, "cacheReadPerMillion": 0.16, "outputPerMillion": 4.00, "billing": "Ollama credits; plan unknown", "freeTier": "No allowance verified"},
+      "priority": 2, "fallback": ["openai/gpt-6.1-sol"],
+      "sources": ["https://ollama.com/api/tags", "https://ollama.com/library/kimi-k2.6", "https://ollama.com/pricing", "local /api/tags alias mapping, 2026-10-31"]
+    },
+    {
+      "id": "openai/gpt-6.1-sol", "provider": "openai", "providerModelId": "gpt-6.1-sol", "upstreamModelId": "gpt-6.1-sol",
+      "enabled": true, "openWeights": false, "hostedInferenceFree": false,
+      "auth": "Existing OpenCode ChatGPT OAuth exported in memory through public credential API, imported into authenticated private server inside sandbox; never Git",
+      "capabilities": ["completion", "tools", "reasoning"],
+      "tasks": ["planning", "debugging", "implementation", "testing", "review"],
+      "limitations": ["Catalog visibility is not proof of entitlement", "Subscription quota and marginal dollar cost unknown", "Use only for explicit complexity or quality justification or bounded failure escalation"],
+      "limits": {"context": null, "inputDefaultCap": 500000, "output": null},
+      "price": {"currency": "USD", "inputPerMillion": null, "cacheReadPerMillion": null, "outputPerMillion": null, "billing": "ChatGPT subscription usage, not API billing", "freeTier": "Not assumed"},
+      "priority": 10, "fallback": [],
+      "sources": ["https://opencode.ai/v2/docs/providers#chatgpt", "authenticated OpenCode model catalog and sandboxed inference/fallback, 2026-10-31"]
+    },
+    {
+      "id": "openai/gpt-5.5", "provider": "openai", "providerModelId": "gpt-5.5", "upstreamModelId": "gpt-5.5",
+      "enabled": false, "openWeights": false, "hostedInferenceFree": false,
+      "auth": "Existing OpenCode ChatGPT OAuth",
+      "capabilities": ["completion", "tools", "reasoning"], "tasks": ["implementation", "review"],
+      "limitations": ["Catalog-listed only; inference not tested; not automatically routed"],
+      "limits": {"context": null, "inputDefaultCap": 272000, "output": null},
+      "price": {"currency": "USD", "inputPerMillion": null, "cacheReadPerMillion": null, "outputPerMillion": null, "billing": "ChatGPT subscription usage", "freeTier": "Not assumed"},
+      "priority": 20, "fallback": [],
+      "sources": ["https://opencode.ai/v2/docs/providers#chatgpt", "authenticated OpenCode model catalog, 2026-10-31"]
+    },
+    {
+      "id": "opencode/big-pickle", "provider": "opencode", "providerModelId": "big-pickle", "upstreamModelId": null,
+      "enabled": false, "openWeights": null, "hostedInferenceFree": null,
+      "auth": "Provider-managed access; current eligibility not probed",
+      "capabilities": ["completion", "tools"], "tasks": ["implementation"],
+      "limitations": ["Previously used by this codebase; free-tier status, upstream weights and current availability unverified; disabled"],
+      "limits": {"context": null, "output": null},
+      "price": {"currency": "USD", "inputPerMillion": null, "cacheReadPerMillion": null, "outputPerMillion": null, "billing": "unknown", "freeTier": "unknown; do not infer from a prior zero estimate"},
+      "priority": 30, "fallback": [], "sources": ["Existing runner configuration; reverify at https://opencode.ai/v2/docs/console/zen"]
+    }
+  ]
+}

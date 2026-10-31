@@ -1,0 +1,5 @@
+Implement Counter in counter.go. Its zero value starts at zero, Value() int returns
+the current value, and Add(amount int) error accepts nonnegative integers only.
+Reject negative additions without changing the value. Use the standard library,
+keep it small, preserve counter_test.go, and run go test ./.... Use Graphify before
+editing. Do not create another application or add dependencies.

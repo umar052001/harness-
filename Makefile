@@ -1,6 +1,6 @@
 # Convenience wrapper around the three builds. `make run` is the one-liner;
 # everything else exists so CI and local checks use the same commands.
-.PHONY: build frontend server run test proof clean
+.PHONY: build frontend server workflow run test proof clean
 
 build: server
 	cd web && npm run build
@@ -11,11 +11,17 @@ frontend:
 server:
 	cargo build --release --manifest-path rust/sandboxd/Cargo.toml
 	mkdir -p .build
-	cd go && go build -o ../.build/ai-os-server ./cmd/server
+	cd go && go build -o ../.build/harness-server ./cmd/server
+
+workflow:
+	cargo build --release --manifest-path rust/sandboxd/Cargo.toml
+	npm ci --ignore-scripts --prefix .tools
+	mkdir -p .build
+	cd go && go build -o ../.build/harness-build ./cmd/harness-build
 
 run: server
 	cd web && npm run build
-	./.build/ai-os-server -addr 127.0.0.1:8090 -web "$(CURDIR)/web/dist" \
+	./.build/harness-server -addr 127.0.0.1:8091 -web "$(CURDIR)/web/dist" \
 		-sandboxd "$(CURDIR)/rust/sandboxd/target/release/sandboxd"
 
 test:

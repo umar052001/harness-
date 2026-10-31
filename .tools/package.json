@@ -1,0 +1,5 @@
+{
+  "name": "harness-workflow-tools",
+  "private": true,
+  "dependencies": {"@dietrichgebert/ponytail": "5.3.2"}
+}
