@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/umar052001/ai-os/go/internal/environment"
 )
 
 // Publishing: turning a run's build output into a real, shareable URL.
@@ -117,6 +119,11 @@ func (s *Server) publish(id string) (Published, error) {
 		return Published{}, err
 	}
 	if listing.Preview == "" {
+		if dir, err := s.store.Dir(id); err == nil {
+			if _, err := environment.LoadApp(dir); err == nil {
+				return Published{RunID: id, Root: ".", At: time.Now().UTC()}, nil
+			}
+		}
 		return Published{}, fmt.Errorf("run %s produced no built site: there is no index.html to publish", id)
 	}
 	return Published{
@@ -219,6 +226,11 @@ func runFromHost(host string) (string, bool) {
 func (s *Server) handlePublishedSite(w http.ResponseWriter, r *http.Request, id string, pub Published) {
 	if s.store == nil {
 		http.Error(w, s.storeErr, http.StatusServiceUnavailable)
+		return
+	}
+	if f, _, err := s.store.Open(id, "ai-os.app.json"); err == nil {
+		f.Close()
+		s.proxyApp(w, r, id)
 		return
 	}
 	// The requested path is resolved through the workspace store, so it gets the

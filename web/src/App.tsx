@@ -3,6 +3,9 @@ import Activity from './Activity'
 import Artifacts from './Artifacts'
 import ChatBar from './ChatBar'
 import SettingsDrawer from './Settings'
+import Usage from './Usage'
+import Database from './Database'
+import { latestUsage } from './usage'
 import { build, localSentence } from './events'
 import { PORTFOLIO_PROMPT } from './demo'
 import { fetchActive, fetchHarnesses, fetchHealth, fetchRunEvents, fetchRuns, stopRun, streamRun } from './api'
@@ -21,6 +24,7 @@ export default function App() {
   const [running, setRunning] = createSignal(false)
   const [stopping, setStopping] = createSignal(false)
   const [runId, setRunId] = createSignal<string | null>(null)
+  const [parentRunId, setParentRunId] = createSignal<string | undefined>()
   const [runs, setRuns] = createSignal<RunSummary[]>([])
   const [active, setActive] = createSignal<ActiveRun[]>([])
   const [fatal, setFatal] = createSignal('')
@@ -39,6 +43,7 @@ export default function App() {
 
   const selectedHarness = createMemo(() => harnesses().find(h => h.id === selected()))
   const current = createMemo(() => runs().find(r => r.id === runId()))
+  const usage = createMemo(() => latestUsage(events(), current()?.usage))
   const isLive = createMemo(() => running() || active().some(r => r.runId === runId()))
   const view = createMemo(() => build(events()))
   const elapsed = createMemo(() => {
@@ -72,7 +77,7 @@ export default function App() {
       })
       await refreshRuns()
     } catch (e) {
-      if (!disposed) { setHealth(null); setFatal(`Cannot reach ai-os. ${(e as Error).message}`) }
+      if (!disposed) { setHealth(null); setFatal(`Cannot reach harness++. ${(e as Error).message}`) }
     } finally { if (!disposed) setLoading(false) }
   }
 
@@ -96,7 +101,7 @@ export default function App() {
 
   onMount(() => {
     try {
-      setPrompt(sessionStorage.getItem('ai-os-draft') || '')
+      setPrompt(sessionStorage.getItem('harness-draft') || '')
     } catch { /* Private browsing may disable storage. */ }
     void connect()
     void poll()
@@ -105,13 +110,13 @@ export default function App() {
     onCleanup(() => { clearInterval(timer); clearInterval(clock) })
   })
   createEffect(() => {
-    try { sessionStorage.setItem('ai-os-draft', prompt()) } catch { /* Drafts are best effort. */ }
+    try { sessionStorage.setItem('harness-draft', prompt()) } catch { /* Drafts are best effort. */ }
   })
   onCleanup(() => { disposed = true; controller?.abort(); clearTimeout(flushTimer) })
 
   async function selectRun(id: string) {
     if (running()) return
-    batch(() => { setRunId(id || null); setEvents([]); setFatal(''); setFiles(0) })
+    batch(() => { setRunId(id || null); setParentRunId(undefined); setEvents([]); setFatal(''); setFiles(0) })
     if (!id) return
     try {
       const evs = await fetchRunEvents(id)
@@ -138,6 +143,7 @@ export default function App() {
     pending = []
     try {
       const result = await streamRun({ harnessId: selected(), prompt: prompt().trim(),
+        parentRunId: parentRunId(),
         models: model().trim() ? [model().trim()] : undefined,
         autoApprove: autoApprove(), timeoutSec: timeLimit() }, ev => {
         if (disposed) return
@@ -146,6 +152,7 @@ export default function App() {
         if (flushTimer === undefined) flushTimer = window.setTimeout(flush, 80)
       }, controller.signal)
       flush()
+      setParentRunId(undefined)
       if (!result.ok) setFatal(result.error || 'Run could not finish. Your files are still available.')
       else setPane('preview')
     } finally {
@@ -159,9 +166,10 @@ export default function App() {
     if (stopping()) return
     setStopping(true)
     try {
+      if (!runId() && !active().length) await poll()
       const id = runId() || active()[0]?.runId
       if (id) await stopRun(id)
-      else controller?.abort()
+      else setFatal('The run has not been assigned yet. Try Stop run again in a moment.')
       await poll()
     } catch (e) { setFatal((e as Error).message) }
     finally { setStopping(false) }
@@ -170,8 +178,8 @@ export default function App() {
   return (
     <div class="app-shell">
       <header class="app-header">
-        <a href="#" class="brand" onClick={e => { e.preventDefault(); if (!running()) void selectRun('') }} aria-label="ai-os home">
-          <span class="brand-mark" aria-hidden="true">a<span>i</span></span><strong>ai-os</strong><span class="brand-caption">BUILD WITH INTENT</span>
+        <a href="#" class="brand" onClick={e => { e.preventDefault(); if (!running()) void selectRun('') }} aria-label="harness++ home">
+          <span class="brand-mark" aria-hidden="true">h<span>+</span></span><strong>harness++</strong><span class="brand-caption">BUILD WITH INTENT</span>
         </a>
         <div class="header-actions">
           <span class={`connection ${health() ? 'online' : ''}`}><i />{health() ? 'Local workspace' : 'Offline'}</span>
@@ -189,11 +197,12 @@ export default function App() {
                 <For each={runs()}>{r => <option value={r.id}>{(r.prompt?.split('\n')[0] || r.id).slice(0, 50)} · {r.status || `${r.files} files`}</option>}</For>
               </select>
             </Show>
-            <Show when={runId()}><button class="quiet-button" disabled={running()} onClick={() => void selectRun('')}>＋ New project</button></Show>
+            <Show when={runId()}><button class="quiet-button" disabled={isLive()} onClick={() => { setParentRunId(runId()!); setPrompt(''); document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')?.focus() }}>Continue project</button><button class="quiet-button" disabled={running()} onClick={() => void selectRun('')}>＋ New project</button></Show>
           </div>
         </div>
 
         <Show when={fatal()}><div class="notice" role="alert"><span>{fatal()}</span><button onClick={() => void connect()}>Reconnect</button><button aria-label="Dismiss error" onClick={() => setFatal('')}>×</button></div></Show>
+        <Show when={parentRunId() && !running()}><div class="active-notice"><span>Describe the next change. Saved project files will be copied into a new attempt; the previous version stays intact.</span><button onClick={() => setParentRunId(undefined)}>Cancel continuation</button></div></Show>
         <Show when={!loading() && !ready()}><div class="notice">{!health() ? 'Start the control plane, then reconnect.' : !health()?.artifactsOk ? 'Workspace storage is unavailable.' : !health()?.sandboxdOk ? 'The sandbox executor is unavailable.' : 'Install a supported agent to begin.'}<button onClick={() => setSettingsOpen(true)}>Open settings</button></div></Show>
         <Show when={active().length > 0 && !running()}><div class="active-notice"><span><i class="live-dot" /> A run is active on this machine. One run at a time.</span><button onClick={() => void selectRun(active()[0].runId)}>View run</button><button disabled={stopping()} onClick={() => void stop()}>Stop run</button></div></Show>
 
@@ -205,7 +214,7 @@ export default function App() {
                 <span class="welcome-label"><i /> YOUR IDEAS. YOUR MACHINE.</span>
                 <h2>From an idea.<br /><span>To something real.</span></h2>
                 <p>Describe what you want to build. An agent works in its own sandbox.<br class="desktop-break" /> Watch it take shape, then preview and keep every file.</p>
-                <div class="workflow" aria-label="How ai-os works"><span><b>01</b> Describe</span><i>→</i><span><b>02</b> Build safely</span><i>→</i><span><b>03</b> Make it yours</span></div>
+                <div class="workflow" aria-label="How harness++ works"><span><b>01</b> Describe</span><i>→</i><span><b>02</b> Build safely</span><i>→</i><span><b>03</b> Make it yours</span></div>
               </div>
               <div class="welcome-footer"><span>OpenCode / Big Pickle</span><span>Saved locally · Export anytime</span></div>
             </div>
@@ -213,7 +222,9 @@ export default function App() {
             <div class="stage-tabs" role="group" aria-label="Workspace view">
               <For each={['preview', 'logs'] as Pane[]}>{p => <button aria-pressed={pane() === p} onClick={() => setPane(p)}>{p === 'preview' ? 'Preview' : 'Activity'}<Show when={p === 'logs' && isLive()}><i class="live-dot" /></Show></button>}</For>
             </div>
-            <div class="run-status" aria-live="polite"><span class={`status-pill ${isLive() ? 'building' : ''}`}>{status().replace('_', ' ')}</span><span class="run-sentence">{isLive() ? localSentence(summary()) : current()?.error || `${files()} files saved in your workspace`}</span><span class="run-time">{Math.floor(elapsed() / 60)}:{String(elapsed() % 60).padStart(2, '0')}</span></div>
+            <div class="run-status" aria-live="polite"><span class={`status-pill ${isLive() ? 'building' : ''}`}>{status() === 'completed' ? 'Code generated' : status().replace('_', ' ')}</span><span class="run-sentence">{isLive() ? localSentence(summary()) : current()?.error || `${files()} files saved in your workspace`}</span><span class="run-time">{Math.floor(elapsed() / 60)}:{String(elapsed() % 60).padStart(2, '0')}</span></div>
+            <Usage report={usage()} model={current()?.model || (running() ? model() || 'opencode/big-pickle' : 'Model not recorded')} />
+            <Show when={runId()}><Database runId={runId()} running={isLive()} /></Show>
             <div class={`stage-pane ${pane() === 'preview' ? '' : 'hidden'}`}>
               <Artifacts runId={runId()} running={isLive()} active={active()} onFiles={setFiles} />
             </div>

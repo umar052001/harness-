@@ -184,7 +184,7 @@ export async function streamRun(
     return await readRun(req, onEvent, signal)
   } catch (error) {
     return { ok: false, error: signal?.aborted
-      ? 'Run stopped. Files already written are saved.'
+      ? 'Disconnected from the run. Use Stop run to cancel server-side work.'
       : `Connection lost. Check run history before retrying. ${(error as Error).message}` }
   }
 }

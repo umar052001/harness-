@@ -57,6 +57,10 @@ type Event struct {
 
 // Request is a run to perform.
 type Request struct {
+	// Tooling is host-controlled configuration for the opt-in routed workflow.
+	Tooling *Tooling `json:"-"`
+	// DatabaseURL is supplied by the host service manager, never by HTTP input.
+	DatabaseURL string `json:"-"`
 	// HarnessID selects the agent.
 	HarnessID string `json:"harnessId"`
 	// Prompt is the user's request.
@@ -88,6 +92,7 @@ const defaultRunTimeout = 20 * time.Minute
 
 // Runner performs runs.
 type Runner struct {
+	path     string
 	registry *harness.Registry
 	sandbox  *sbx.Client
 	// sandboxed decides whether the agent runs under sandboxd. Tests turn it off
@@ -98,7 +103,7 @@ type Runner struct {
 
 // New builds a runner.
 func New(reg *harness.Registry, sandboxBinary string) *Runner {
-	return &Runner{registry: reg, sandbox: &sbx.Client{Binary: sandboxBinary}, sandboxed: true}
+	return &Runner{registry: reg, sandbox: &sbx.Client{Binary: sandboxBinary}, sandboxed: true, path: RuntimePath()}
 }
 
 // NewUnsandboxed builds a runner that does not confine the agent.
@@ -159,6 +164,11 @@ func (r *Runner) Run(ctx context.Context, req Request, emit func(Event)) error {
 		if err := prepareOpenCode(ws, req.Models[0]); err != nil {
 			return err
 		}
+		if req.Tooling != nil {
+			if err := prepareTooling(ws, req.Tooling); err != nil {
+				return err
+			}
+		}
 	}
 
 	switch h.Kind {
@@ -214,6 +224,7 @@ func (r *Runner) runACP(ctx context.Context, h *harness.Harness, req Request, ws
 		em.send(KindMessage, res.Text, map[string]any{"final": true})
 	}
 	em.send(KindUsage, "", map[string]any{
+		"usage":     res.Usage,
 		"toolCalls": res.ToolCalls, "stopReason": res.StopReason,
 		"durationMs": res.Duration.Milliseconds(),
 	})
@@ -305,7 +316,7 @@ func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, w
 		// resolves its *own* /proc/<pid> does not match it and the runtime dies
 		// anyway. The grant is read-only; the agent can observe no more than it
 		// could unconfined, and exposes nothing outside its own namespace.
-		ReadPaths: append(append(nodeRuntimeDirs(), "/proc"), resolvReadPaths()...),
+		ReadPaths: append(append(append(RuntimeReadPaths(), "/proc"), sbx.ResolverReadPaths()...), toolingPaths(req.Tooling)...),
 		// Pipe transport, not a pty. ACP is a JSON-RPC dialect over stdio, and a
 		// pty would echo every frame back at the peer, rewrite newlines, and
 		// line-buffer a protocol that has no lines to buffer on.
@@ -453,7 +464,7 @@ func (r *Runner) runCLI(ctx context.Context, h *harness.Harness, req Request, ws
 			Env: r.childEnv(h, req), Stdio: sbx.StdioPipe,
 			Stdin: stdin, Stdout: output, Stderr: &lineEmitter{emit: em.outputLine("stderr")},
 			AllowNet: h.NeedsNetwork != "", NetWhy: netWhy(h),
-			ReadPaths: append(append(nodeRuntimeDirs(), "/proc"), resolvReadPaths()...),
+			ReadPaths: append(append(RuntimeReadPaths(), "/proc"), sbx.ResolverReadPaths()...),
 			TimeoutMs: int(req.Timeout.Milliseconds()),
 		})
 		if err != nil {
@@ -531,8 +542,12 @@ func (r *Runner) runCLI(ctx context.Context, h *harness.Harness, req Request, ws
 // everything.
 func (r *Runner) childEnv(h *harness.Harness, req Request) []string {
 	home := filepath.Join(reqWorkspace(req), ".home")
+	path := r.path
+	if path == "" {
+		path = os.Getenv("PATH")
+	}
 	env := []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + path,
 		"HOME=" + home,
 		// Tools do not all honour HOME: XDG directories are resolved
 		// independently and would otherwise fall back to the wrapped library's
@@ -560,6 +575,9 @@ func (r *Runner) childEnv(h *harness.Harness, req Request) []string {
 			env = append(env, k+"="+h.Env[k])
 		}
 	}
+	if req.DatabaseURL != "" {
+		env = append(env, "DATABASE_URL="+req.DatabaseURL)
+	}
 	return env
 }
 
@@ -570,7 +588,7 @@ func reqWorkspace(req Request) string {
 	return os.TempDir()
 }
 
-// nodeRuntimeDirs lists where node installs live, so a harness that is a
+// RuntimeReadPaths lists where managed toolchains live, so a harness that is a
 // mise-managed or nvm-installed binary is reachable under the sandbox.
 //
 // Only paths that exist are returned. The executor validates every grant before
@@ -579,7 +597,7 @@ func reqWorkspace(req Request) string {
 // assumption, and silently dropping it would make the sandbox appear to work
 // while the agent failed for an unrelated-looking reason. Filtering happens here
 // instead, because "this install method is not in use" is not a policy error.
-func nodeRuntimeDirs() []string {
+func RuntimeReadPaths() []string {
 	var candidates []string
 	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates,
@@ -596,26 +614,6 @@ func nodeRuntimeDirs() []string {
 		}
 	}
 	return dirs
-}
-
-// resolvReadPaths returns the directories a resolver needs in order to read the
-// nameserver list.
-//
-// On systemd hosts /etc/resolv.conf is a symlink into /run (which the sandbox
-// does not otherwise grant); without the symlink target readable, the agent
-// cannot resolve a single hostname (EAI_AGAIN) no matter how much egress is
-// allowed, and every model API call fails with "Unable to connect".
-func resolvReadPaths() []string {
-	const resolv = "/etc/resolv.conf"
-	target, err := filepath.EvalSymlinks(resolv)
-	if err != nil || target == resolv {
-		// Not a symlink (or unreadable): /etc is already granted.
-		return nil
-	}
-	if d := filepath.Dir(target); d != "" {
-		return []string{d}
-	}
-	return nil
 }
 
 // decodeChunk turns a base64 output payload into text for display.
@@ -681,6 +679,8 @@ func (e *emitter) outputLine(stream string) func(string) {
 func (e *emitter) acpSink() func(acp.Event) {
 	return func(ev acp.Event) {
 		switch ev.Type {
+		case acp.EventUsage:
+			e.send(KindUsage, "", map[string]any{"usage": ev.Usage})
 		case acp.EventMessage:
 			e.send(KindMessage, ev.Text, nil)
 		case acp.EventThought:

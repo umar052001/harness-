@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/umar052001/ai-os/go/internal/environment"
 	"github.com/umar052001/ai-os/go/internal/harness"
 	"github.com/umar052001/ai-os/go/internal/narrator"
 	"github.com/umar052001/ai-os/go/internal/planner"
@@ -64,6 +65,13 @@ type Options struct {
 
 // Server is an HTTP server for the ai-os control plane.
 type Server struct {
+	apps         environment.Apps
+	environments *environment.Manager
+	jobContext   context.Context
+	cancelJobs   context.CancelFunc
+	jobsMu       sync.Mutex
+	jobs         sync.WaitGroup
+	stopping     bool
 	run          Runner
 	sandboxBin   string
 	planner      *planner.Planner
@@ -111,7 +119,9 @@ func New(run Runner, opt Options) *Server {
 	}
 	if store != nil {
 		s.publishIndex = newPublishIndex(store.Root())
+		s.environments = environment.New(filepath.Join(store.Root(), ".environments"))
 	}
+	s.jobContext, s.cancelJobs = context.WithCancel(context.Background())
 	if opt.SandboxBinary != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -131,9 +141,9 @@ func New(run Runner, opt Options) *Server {
 // generated work.
 func defaultWorkspacesDir() string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".local", "share", "ai-os", "workspaces")
+		return filepath.Join(home, ".local", "share", "harness++", "workspaces")
 	}
-	return filepath.Join(os.TempDir(), "ai-os-workspaces")
+	return filepath.Join(os.TempDir(), "harness-workspaces")
 }
 
 // defaultRunTimeLimit is the wall-clock ceiling applied when a caller names none.
@@ -178,6 +188,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/runs", s.handleRuns)
 	mux.HandleFunc("GET /api/runs/active", s.handleActiveRuns)
 	mux.HandleFunc("POST /api/runs/{id}/stop", s.handleStopRun)
+	mux.HandleFunc("GET /api/workspace/{id}/database", s.handleDatabaseStatus)
+	mux.HandleFunc("POST /api/workspace/{id}/database", s.handleDatabaseStart)
+	mux.HandleFunc("DELETE /api/workspace/{id}/database", s.handleDatabaseStop)
+	mux.HandleFunc("GET /api/workspace/{id}/app", s.handleApp)
+	mux.HandleFunc("POST /api/workspace/{id}/app", s.handleApp)
+	mux.HandleFunc("DELETE /api/workspace/{id}/app", s.handleApp)
 	mux.HandleFunc("GET /api/workspace/{id}", s.handleWorkspaceList)
 	mux.HandleFunc("GET /api/workspace/{id}/events", s.handleWorkspaceEvents)
 	mux.HandleFunc("GET /api/workspace/{id}/raw/{path...}", s.handleWorkspaceRaw)
@@ -210,6 +226,7 @@ func (s *Server) Handler() http.Handler {
 // ---------------------------------------------------------------------------
 
 type runRequest struct {
+	ParentRunID string   `json:"parentRunId,omitempty"`
 	HarnessID   string   `json:"harnessId"`
 	Prompt      string   `json:"prompt"`
 	Workspace   string   `json:"workspace,omitempty"`
@@ -218,10 +235,8 @@ type runRequest struct {
 	TimeoutSec  int      `json:"timeoutSec,omitempty"`
 }
 
-// handleRun starts a run and streams every event as a server-sent event. The
-// stream is one run's full life, ends with event "stream.end", and is the only
-// way to learn nothing twice: a client that drops the stream can ask again, but
-// there is no history endpoint to reconcile against.
+// handleRun starts a host-owned job and attaches its initial SSE observer.
+// A disconnected observer can recover through run history and the event log.
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	body, err := io.ReadAll(r.Body)
@@ -257,6 +272,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if req.HarnessID == "opencode" && (len(req.Models) == 0 || strings.TrimSpace(req.Models[0]) == "") {
 		req.Models = []string{"opencode/big-pickle"}
 	}
+	if req.ParentRunID != "" {
+		if _, err := s.store.Dir(req.ParentRunID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "parent run does not exist"})
+			return
+		}
+	}
 
 	// Take a concurrency slot before anything durable is created. Refusing here
 	// rather than mid-stream means the client gets a plain 409 it can explain,
@@ -268,12 +289,33 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	})
 	if aerr != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":  "another run is already in flight; wait for it to finish or stop it",
+			"error":  "a run or service operation is already in flight; wait for it to finish or stop the active run",
 			"active": s.active.list(),
 		})
 		return
 	}
-	defer s.active.release(token)
+	if !s.beginJob() {
+		s.active.release(token)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "server is shutting down"})
+		return
+	}
+	dispatched := false
+	defer func() {
+		if !dispatched {
+			s.active.release(token)
+			s.jobs.Done()
+		}
+	}()
+	if req.ParentRunID != "" && s.apps.Status(req.ParentRunID).Active {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "stop the parent app before copying its files and database into a new attempt"})
+		return
+	}
+	for _, live := range s.active.list() {
+		if req.ParentRunID != "" && live.RunID == req.ParentRunID {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "wait for the parent run to stop before continuing"})
+			return
+		}
+	}
 
 	runReq := runner.Request{
 		HarnessID:   req.HarnessID,
@@ -289,13 +331,29 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// them, not only afterwards.
 	var runID string
 	if s.store != nil {
-		id, dir, serr := s.store.Create()
+		var id, dir string
+		var serr error
+		if req.ParentRunID == "" {
+			id, dir, serr = s.store.Create()
+		} else {
+			id, dir, serr = s.store.Continue(r.Context(), req.ParentRunID)
+			runReq.Prompt = "Continue the existing project in this workspace. Preserve existing functionality unless the request changes it. Agent history and dependency caches are not included; inspect the relevant source files first.\n\n" + req.Prompt
+		}
 		if serr != nil {
 			http.Error(w, "workspace: "+serr.Error(), http.StatusInternalServerError)
 			return
 		}
 		runID = id
 		runReq.Workspace = dir
+		defer func() {
+			if !dispatched {
+				_ = os.RemoveAll(dir)
+				_ = os.Remove(filepath.Join(s.store.Root(), id+".json"))
+				if path, err := s.store.eventLogPath(id); err == nil {
+					_ = os.Remove(path)
+				}
+			}
+		}()
 	} else {
 		runReq.Workspace = req.Workspace
 	}
@@ -310,13 +368,36 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if runID != "" {
 		s.active.identify(token, runID, runReq.Workspace)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), runReq.Timeout)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(s.jobContext, runReq.Timeout)
+	defer func() {
+		if !dispatched {
+			cancel()
+		}
+	}()
 	s.active.setCancel(token, cancel)
 	meta := RunMetadata{Prompt: req.Prompt, HarnessID: req.HarnessID, Status: "running", StartedAt: time.Now()}
+	meta.ProjectID = runID
+	meta.ParentRunID = req.ParentRunID
+	if req.ParentRunID != "" {
+		meta.ProjectID = s.store.metadata(req.ParentRunID).ProjectID
+		if meta.ProjectID == "" {
+			meta.ProjectID = req.ParentRunID
+		}
+	}
 	if len(req.Models) > 0 {
 		meta.Model = req.Models[0]
 	}
+	serviceCtx, serviceCancel := context.WithTimeout(ctx, 10*time.Second)
+	runReq.DatabaseURL, err = s.environments.Connection(serviceCtx, meta.ProjectID)
+	serviceCancel()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "project database: " + err.Error()})
+		return
+	}
+	if runReq.DatabaseURL != "" {
+		runReq.Prompt = "A project PostgreSQL database is available through DATABASE_URL in your environment. Read that variable in code; never print or hardcode the connection string. Preserve existing data and use migrations for schema changes.\n\n" + runReq.Prompt
+	}
+	runReq.Prompt = environment.AppInstructions + runReq.Prompt
 	if err := s.store.saveMetadata(runID, meta); err != nil {
 		http.Error(w, "could not save run: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -327,7 +408,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not open transcript: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer transcript.Close()
+	defer func() {
+		if !dispatched {
+			_ = transcript.Close()
+		}
+	}()
 	var recordMu sync.Mutex
 	record := func(payload []byte) {
 		recordMu.Lock()
@@ -382,77 +467,21 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err = s.run.Run(ctx, runReq, func(ev runner.Event) {
-		// Terminal state is emitted only after the runner has cleaned up processes.
-		if ev.Kind == runner.KindRunFinished {
-			return
-		}
-		payload, merr := json.Marshal(ev)
-		if merr != nil {
-			return
-		}
-		// Event name is the kind: client code matches kinds, not a single opaque
-		// stream. The JSON body still carries kind so a replayed or logged event
-		// is self-describing.
-		sink.frame(ev.Kind, string(payload))
-		// The same bytes go to the transcript the history endpoint replays.
-		// Persisting here, rather than reconstructing later, is what keeps the
-		// live view and the recorded one identical.
-		record(payload)
-	})
-	if ctx.Err() != nil {
-		err = ctx.Err()
-	}
-	finished := time.Now()
-	meta.FinishedAt = &finished
-	meta.Status = "completed"
-	if err != nil {
-		meta.Status, meta.Error = "failed", err.Error()
-		if errors.Is(err, context.Canceled) {
-			meta.Status, meta.Error = "cancelled", "Run stopped. Files already written are saved."
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			meta.Status, meta.Error = "timed_out", "Time limit reached. Files already written are saved."
-		}
-	}
-	if saveErr := s.store.saveMetadata(runID, meta); saveErr != nil {
-		log.Printf("save run %s: %v", runID, saveErr)
-	}
-	terminal, _ := json.Marshal(runner.Event{Kind: runner.KindRunFinished, At: finished, Text: meta.Status,
-		Data: json.RawMessage(mustJSONStatus(err == nil, meta.Status, meta.Error))})
-	record(terminal)
-	sink.frame(runner.KindRunFinished, string(terminal))
-
-	end := map[string]any{"ok": err == nil}
-	if err != nil {
-		// The runner returns errors before any event for a bad harness or empty
-		// prompt; the stream still has to say why it ended. A deadline is
-		// translated here too so the final frame agrees with the error event.
-		if errors.Is(err, context.DeadlineExceeded) {
-			end["error"] = "run timed out after " + runReq.Timeout.String()
-			end["timeout"] = true
-		} else {
-			end["error"] = err.Error()
-		}
-	}
-	payload, merr := json.Marshal(end)
-	if merr == nil {
-		sink.frame("stream.end", string(payload))
-	}
-}
-
-// persistEvent appends one event to the run's on-disk transcript.
-//
-// A failure here must not take the run down: the stream in front of the user is
-// the primary artifact, and losing the recording of a run that is otherwise
-// succeeding would be a worse outcome than a gap in its history. It is logged
-// loudly instead, because a transcript that stops without a word is a trap.
-func (s *Server) persistEvent(runID string, payload []byte) {
-	if s.store == nil || runID == "" {
-		return
-	}
-	if err := s.store.AppendEvents(runID, [][]byte{payload}); err != nil {
-		log.Printf("event transcript %s: %v", runID, err)
+	jobDone := make(chan struct{})
+	dispatched = true
+	// This worker owns the run until terminal state and process cleanup complete.
+	// The handler may return earlier; its closed sink drops subsequent live writes.
+	go func() {
+		defer s.jobs.Done()
+		defer close(jobDone)
+		defer s.active.release(token)
+		defer cancel()
+		defer transcript.Close()
+		s.executeJob(ctx, runReq, runID, meta, record, sink)
+	}()
+	select {
+	case <-jobDone:
+	case <-r.Context().Done():
 	}
 }
 

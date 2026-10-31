@@ -77,6 +77,15 @@ func (c *Client) onSessionUpdate(raw json.RawMessage) {
 	}
 
 	switch kind {
+	case "usage_update":
+		var envelope struct {
+			Update json.RawMessage `json:"update"`
+		}
+		if json.Unmarshal(raw, &envelope) == nil && len(envelope.Update) > 0 {
+			c.onUsageUpdate(envelope.Update)
+		} else {
+			c.onUsageUpdate(raw)
+		}
 	case "agent_message_chunk", "agent_thought_chunk":
 		// Message text lives either inline (opencode) or nested in a spec-style
 		// message whose content is an array of blocks, or in a bare array. The

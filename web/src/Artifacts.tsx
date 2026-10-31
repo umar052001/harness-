@@ -11,6 +11,7 @@ import {
   rawURL,
 } from './api'
 import type { ActiveRun, Listing, RunSummary } from './types'
+import { appStatusLabel, type AppStatus } from './app-status'
 
 /**
  * Device widths the preview can be drawn at.
@@ -60,6 +61,9 @@ export default function Artifacts(props: {
   // The address this run's site is published on, empty while it is not.
   const [site, setSite] = createSignal('')
   const [publishing, setPublishing] = createSignal(false)
+  const [appStatus, setAppStatus] = createSignal<AppStatus>()
+  const [appBusy, setAppBusy] = createSignal(false)
+  const hasApp = () => listing()?.files.some(f => f.path === 'ai-os.app.json') ?? false
   const [copied, setCopied] = createSignal(false)
   // How wide to draw the preview. "fill" uses the panel; the others are the
   // device widths a design is actually checked at, because a layout that works
@@ -73,6 +77,17 @@ export default function Artifacts(props: {
   const [previewState, setPreviewState] = createSignal<'checking' | 'ok' | 'error'>('ok')
 
   let timer: number | undefined
+
+  async function refreshApp() {
+    const id = props.runId
+    if (!id) return
+    try {
+      const res = await fetch(`/api/workspace/${id}/app`, { signal: AbortSignal.timeout(5000) })
+      if (!res.ok) throw new Error('Runtime status unavailable')
+      const app = await res.json()
+      if (props.runId === id) setAppStatus(app)
+    } catch { if (props.runId === id) setAppStatus(undefined) }
+  }
 
   const refresh = async () => {
     const id = props.runId
@@ -113,6 +128,9 @@ export default function Artifacts(props: {
     setOpen(null)
     setSource(null)
     setSite('')
+    setAppStatus(undefined)
+    setAppBusy(false)
+    void refreshApp()
     void fetchPublished(id)
       .then((u) => { if (props.runId === id) setSite(u ?? '') })
       .catch(() => undefined)
@@ -126,6 +144,7 @@ export default function Artifacts(props: {
   onMount(() => {
     timer = window.setInterval(() => {
       if (props.runId && (props.running || selectedIsActive())) void refresh()
+      if (props.runId && hasApp()) void refreshApp()
     }, 3000)
   })
 
@@ -271,8 +290,27 @@ export default function Artifacts(props: {
 
   const frameSandbox = () =>
     site() && !open()
-      ? 'allow-scripts allow-same-origin allow-forms allow-popups'
+      ? 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals'
       : 'allow-scripts allow-forms allow-popups'
+
+  async function changeApp() {
+    const id = props.runId
+    if (!id || appBusy()) return
+    setAppBusy(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/workspace/${id}/app`, { method: appStatus()?.active ? 'DELETE' : 'POST', signal: AbortSignal.timeout(310000) })
+      const text = await res.text()
+      if (!res.ok) throw new Error(text)
+      const app = JSON.parse(text)
+      if (props.runId !== id) return
+      setAppStatus(app)
+      setSite(app.url)
+      setOpen(null)
+      setNonce(n => n + 1)
+    } catch (e) { if (props.runId === id) setError((e as Error).message) }
+    finally { if (props.runId === id) { setAppBusy(false); void refreshApp() } }
+  }
 
   // The drawn width of the frame, in CSS pixels. `fill` is 0, meaning "as wide
   // as the panel", which is the only sensible default in a 420px rail.
@@ -388,6 +426,12 @@ export default function Artifacts(props: {
         </Show>
       </div>
 
+      <Show when={hasApp()}>
+          <div class="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
+            <button class="quiet-button" disabled={appBusy() || props.running} onClick={() => void changeApp()}>{appBusy() ? 'Working…' : appStatus()?.active ? 'Stop app' : 'Build & start app'}</button>
+            <span class="min-w-0 flex-1 break-words" role="status">{appStatusLabel(appStatus())}</span>
+          </div>
+      </Show>
       <Show when={previewURL()}>
         <div class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-1.5 text-[10px]">
           <Show

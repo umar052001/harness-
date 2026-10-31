@@ -8,6 +8,9 @@ web/dist/
 
 # Dependencies
 web/node_modules/
+.tools/node_modules/
+__pycache__/
+.pytest_cache/
 
 # Local agent tooling and editor state
 .agents/
@@ -39,9 +42,11 @@ test-results/
 
 # Runtime state and generated projects
 workspaces/
+.environments/
 recordings/
 screenshots/
 *.events.jsonl
+benchmark-results*.jsonl
 *.sse
 *.log
 *.db

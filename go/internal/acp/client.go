@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/umar052001/ai-os/go/internal/usage"
 )
 
 // protocolVersion is the ACP version this client implements.
@@ -37,6 +39,7 @@ const defaultPromptTimeout = 10 * time.Minute
 // ACP notification kind. Raw payloads are carried alongside so nothing is lost
 // and the frontend can narrow later without a protocol change.
 type Event struct {
+	Usage *usage.Report `json:"usage,omitempty"`
 	// Type is one of the Event* constants.
 	Type string `json:"type"`
 	// Text is the human-visible message or tool detail, when there is one.
@@ -91,10 +94,12 @@ const (
 	EventAvailable  = "available"
 	EventError      = "error"
 	EventDone       = "done"
+	EventUsage      = "usage"
 )
 
 // Result is the outcome of a prompt.
 type Result struct {
+	Usage usage.Report `json:"usage"`
 	// StopReason is the agent's own classification, for example "end_turn".
 	StopReason string `json:"stopReason,omitempty"`
 	// Text is the concatenation of all agent messages, which is the answer a
@@ -198,6 +203,7 @@ type Client struct {
 
 // collector accumulates one prompt's output.
 type collector struct {
+	usage     usage.Report
 	mu        sync.Mutex
 	text      strings.Builder
 	toolCalls int
@@ -407,7 +413,8 @@ func (c *Client) Prompt(ctx context.Context, prompt string) (Result, error) {
 	// it because the reader goroutine is independent, which is the whole reason
 	// for that split.
 	var promptResult struct {
-		StopReason string `json:"stopReason"`
+		StopReason string          `json:"stopReason"`
+		Usage      json.RawMessage `json:"usage"`
 	}
 	callErr := c.call(runCtx, "session/prompt", map[string]any{
 		"sessionId": c.sessionID,
@@ -418,7 +425,12 @@ func (c *Client) Prompt(ctx context.Context, prompt string) (Result, error) {
 	// the reader is the only writer to coll and it processes frames in order, so
 	// the response being delivered is the happens-before edge.
 	text, tools := c.coll.snapshot()
+	var tokens *usage.Tokens
+	if json.Unmarshal(promptResult.Usage, &tokens) != nil {
+		tokens = nil
+	}
 	out := Result{
+		Usage:      c.coll.usageSnapshot(tokens),
 		StopReason: promptResult.StopReason,
 		Text:       text,
 		ToolCalls:  tools,

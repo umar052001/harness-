@@ -42,6 +42,7 @@ export interface RunEvent {
 }
 
 export interface RunRequest {
+	parentRunId?: string
   harnessId: string
   prompt: string
   models?: string[]
@@ -72,6 +73,9 @@ export interface Listing {
 }
 
 export interface RunSummary {
+	projectId?: string
+	parentRunId?: string
+	usage?: UsageReport
   id: string
   dir: string
   modTime: string
@@ -83,6 +87,19 @@ export interface RunSummary {
   startedAt?: string
   finishedAt?: string
   error?: string
+}
+
+export interface UsageReport {
+  tokens?: {
+    totalTokens: number
+    inputTokens: number
+    outputTokens: number
+    thoughtTokens?: number
+    cachedReadTokens?: number
+    cachedWriteTokens?: number
+  }
+  context?: { used: number; size: number }
+  cost?: { amount: number; currency: string }
 }
 
 export interface NarrateStatus {

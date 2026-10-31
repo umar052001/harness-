@@ -11,7 +11,7 @@ test('network failure, abort, and truncated streams cannot look successful', asy
   assert.equal((await streamRun(req, () => {})).ok, false)
   const controller = new AbortController()
   controller.abort()
-  assert.match((await streamRun(req, () => {}, controller.signal)).error, /stopped/)
+  assert.match((await streamRun(req, () => {}, controller.signal)).error, /Disconnected/)
   globalThis.fetch = async () => new Response('event: message\ndata: {"kind":"message","text":"partial"}\n\n')
   assert.equal((await streamRun(req, () => {})).ok, false)
   globalThis.fetch = async () => new Response('event: stream.end\ndata: {"ok":true}\n\n')

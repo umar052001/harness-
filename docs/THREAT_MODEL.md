@@ -97,6 +97,19 @@ lacks Landlock, the executor exits without exec'ing. There is no path that runs
 the command unconfined. Exit code 125 distinguishes a refusal from the command's
 own failure, so an operator can tell the two apart.
 
+### Managed project databases
+
+Project databases use a separate rootless Podman runtime. The host selects a fixed
+PostgreSQL image, loopback binding, resource limits, and labelled volume. The agent
+receives its project's database credential but no container-engine socket. The
+agent can change that database, including deleting its data; filesystem checkpoints
+do not roll back SQL changes. Database backups remain the operator's responsibility.
+
+The host-owned credential files sit outside writable agent workspaces. Other
+same-user host processes are still trusted, and this does not provide tenant
+isolation for a public service. See [Environments](ENVIRONMENTS.md) for lifecycle
+and resource policy.
+
 ## Limitations
 
 **The attestation is not unforgeable.** The child writes its own evidence to a

@@ -110,6 +110,18 @@ func runFakeAgent(mode string) {
 			report("model-selection %s", string(m.Params))
 			send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{}})
 		case "session/prompt":
+			if mode == "usage" {
+				for i := 0; i < 2; i++ {
+					send(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+						"sessionId": sid, "update": map[string]any{"sessionUpdate": "usage_update", "used": 100, "size": 200000,
+							"cost": map[string]any{"amount": 0, "currency": "USD"}},
+					}})
+				}
+				send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{
+					"stopReason": "end_turn", "usage": map[string]any{"totalTokens": 350, "inputTokens": 200, "outputTokens": 50, "cachedReadTokens": 100},
+				}})
+				continue
+			}
 			if mode == "spec-shape" {
 				// The reference-spec dialect: a "type" discriminator and a message
 				// wrapper whose content is an array of blocks. The client must

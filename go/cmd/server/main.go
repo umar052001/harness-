@@ -1,4 +1,4 @@
-// Command server exposes the ai-os control plane over HTTP.
+// Command server exposes the harness++ control plane over HTTP.
 //
 // Three routes and nothing else: a health check, the harness catalogue, and a
 // run endpoint that streams the run's whole event log as server-sent events.
@@ -27,12 +27,12 @@ import (
 
 func main() {
 	var (
-		addr     = flag.String("addr", "127.0.0.1:8090", "listen address")
+		addr     = flag.String("addr", "127.0.0.1:8091", "listen address")
 		webdir   = flag.String("web", "", "built frontend directory to serve (optional)")
 		sandboxd = flag.String("sandboxd", "", "path to sandboxd (default: located binary)")
 		overlay  = flag.String("harness-overlay", "", "directory of harness manifests to overlay")
 		origins  = flag.String("origins", defaultOrigins, "comma-separated CORS allow-list")
-		workRoot = flag.String("workspaces", "", "where run workspaces are created (default: ~/.local/share/ai-os/workspaces)")
+		workRoot = flag.String("workspaces", "", "where run workspaces are created (default: ~/.local/share/harness++/workspaces)")
 	)
 	flag.Parse()
 
@@ -86,10 +86,13 @@ func main() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		if err := srv.Shutdown(shut); err != nil {
+			log.Printf("job shutdown: %v", err)
+		}
 		_ = httpSrv.Shutdown(shut)
 	}()
 
-	log.Printf("ai-os control plane on %s (sandboxd %s)", *addr, *sandboxd)
+	log.Printf("harness++ control plane on %s (sandboxd %s)", *addr, *sandboxd)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve: %v", err)
 	}

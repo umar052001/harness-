@@ -156,14 +156,14 @@ body :where(a, button, input, select, textarea, [tabindex]):focus-visible {
 button:not(:disabled), select { cursor: pointer; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 .quiet-button:hover:not(:disabled) { background: #2b3225; }
-.app-main { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 26px 38px 14px; gap: 16px; }
+.app-main { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 26px 38px 14px; gap: 16px; }
 .workspace-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-shrink: 0; }
 .workspace-title { min-width: 0; }
 .eyebrow { font-size: 9px; letter-spacing: .17em; color: #a3ad98; }
 .workspace-title h1 { margin: 4px 0 0; font-size: 22px; font-weight: 500; letter-spacing: -.6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-actions { gap: 9px; flex-shrink: 0; }
 .workspace-actions select { max-width: 260px; background: #1b2017; border: 1px solid #343b2f; border-radius: 9px; padding: 10px; font-size: 12px; color: #cad2c0; }
-.workspace-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid #343b2f; border-radius: 18px; overflow: hidden; background: #191c17; box-shadow: 0 20px 60px #00000020; }
+.workspace-stage { position: relative; flex: 1; min-height: 480px; display: flex; flex-direction: column; border: 1px solid #343b2f; border-radius: 18px; overflow: hidden; background: #191c17; box-shadow: 0 20px 60px #00000020; }
 .welcome { position: relative; flex: 1; min-height: 240px; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 38px 28px 50px; background: radial-gradient(ellipse at 50% 0, #34402a55, transparent 65%); }
 .welcome-grid { position: absolute; inset: 0; pointer-events: none; opacity: .2; background-image: linear-gradient(#6a76501c 1px, transparent 1px), linear-gradient(90deg, #6a76501c 1px, transparent 1px); background-size: 48px 48px; mask-image: radial-gradient(ellipse at center, black, transparent 75%); }
 .welcome-content { z-index: 1; text-align: center; }
@@ -213,6 +213,12 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .empty-result h2 { font-size: 22px; font-weight: 500; color: #e0ead6; letter-spacing: -.4px; }
 .empty-result p { max-width: 420px; font-size: 13px; line-height: 1.7; }
 .empty-result button { padding: 9px 18px; border: 1px solid #647455; border-radius: 9px; color: #d2e9bf; }
+.usage-panel { padding: 8px 18px; border-bottom: 1px solid #343b2f; font-size: 11px; color: #b9c6ac; flex-shrink: 0; max-height: 200px; overflow-y: auto; }
+.usage-panel summary { cursor: pointer; }
+.usage-panel dl { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0; }
+.usage-panel dt { color: #a1ad94; }
+.usage-panel dd { margin: 0; color: #e0ead6; font-variant-numeric: tabular-nums; }
+.usage-panel p { max-width: 780px; margin: 5px 0; }
 @media (max-width: 760px) {
   .app-header { padding: 0 18px; height: 62px; }
   .brand-caption, .connection, .composer-caption span:last-child { display: none; }
@@ -220,8 +226,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .workspace-heading { gap: 12px; }
   .workspace-title h1 { font-size: 18px; }
   .workspace-actions select { max-width: 145px; font-size: 11px; }
-  .workspace-actions .quiet-button { font-size: 0; width: 32px; padding: 8px; }
-  .workspace-actions .quiet-button::after { content: '+'; font-size: 17px; }
+  .workspace-heading { flex-wrap: wrap; }
+  .workspace-actions { flex-wrap: wrap; max-width: 100%; }
   .welcome { padding: 30px 16px 65px; }
   .welcome h2 { font-size: 38px; }
   .welcome p { font-size: 12px; }

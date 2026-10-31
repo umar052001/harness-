@@ -37,12 +37,13 @@ type ActiveRun struct {
 // Serialising them makes the failure mode honest: the second caller is told the
 // first is still going, with enough detail to wait for it.
 type runRegistry struct {
-	mu      sync.Mutex
-	limit   int
-	runs    map[string]*ActiveRun
-	order   []string
-	seq     int
-	cancels map[string]context.CancelFunc
+	maintenance bool
+	mu          sync.Mutex
+	limit       int
+	runs        map[string]*ActiveRun
+	order       []string
+	seq         int
+	cancels     map[string]context.CancelFunc
 }
 
 func newRunRegistry(limit int) *runRegistry {
@@ -60,7 +61,7 @@ func newRunRegistry(limit int) *runRegistry {
 func (r *runRegistry) acquire(ar ActiveRun) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.runs) >= r.limit {
+	if r.maintenance || len(r.runs) >= r.limit {
 		return "", errRunsBusy
 	}
 	r.seq++
@@ -69,6 +70,22 @@ func (r *runRegistry) acquire(ar ActiveRun) (string, error) {
 	r.runs[token] = &cp
 	r.order = append(r.order, token)
 	return token, nil
+}
+
+func (r *runRegistry) beginMaintenance() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.maintenance || len(r.runs) != 0 {
+		return false
+	}
+	r.maintenance = true
+	return true
+}
+
+func (r *runRegistry) endMaintenance() {
+	r.mu.Lock()
+	r.maintenance = false
+	r.mu.Unlock()
 }
 
 // identify attaches the run id and workspace once the workspace exists.
