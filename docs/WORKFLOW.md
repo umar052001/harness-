@@ -11,6 +11,9 @@
 - `integrations/ponytail`: directory entrypoint for the pinned upstream plugin.
 - `integrations/audit`: observes Ponytail injection and Graphify tool calls; blocks
   edits/shell before Graphify retrieval.
+- `go/internal/api/workflow.go`: dashboard routing, explicit subscription permission,
+  and host runtime verification. Reports stay in `workspaces/.workflow` while
+  generated files remain in the assigned durable workspace.
 
 No Python orchestration is shipped. Graphify 0.9.67 is an installed external tool
 whose Python runtime and libraries receive narrow read/execute grants. AST-only
@@ -55,9 +58,53 @@ Normally one Gemma call supplies both the plan and stage routes. One corrective
 call is permitted for invalid plan JSON/schema. Transport failures do not trigger
 repeated planning calls. A host registry allowlist validates every selection and
 enforces the GPT permission and escalation justification. A failed stage or
-acceptance check permits one configured fallback, never an unbounded retry loop.
+acceptance check permits the configured Sol fallback and a bounded Sol repair,
+never an unbounded retry loop.
 The revised plan stores the failure and next model. Maximum stages/attempts and
-the total deadline are checked by the host, not delegated to a model.
+any optional total deadline are checked by the host, not delegated to a model.
+
+Dashboard OpenCode Build now calls this same workflow rather than the old
+Big Pickle runner. Automatic mode is Gemma-first; Settings lists enabled registry
+models and controls subscription permission. A selected model overrides stage
+execution, while Gemma still plans first. A Gemma planning failure permits one
+authorized GPT planning fallback, validated against the same plan schema.
+GPT-5.5 was catalog-listed but a live isolated request rejected it as unsupported
+with this ChatGPT account; it is disabled. Astra is disabled by operator request,
+including manual selection. The host enforces Gemma for the initial automatic
+implementation, then GPT-6.1 Sol for follow-up stages and repairs. A stage permits
+one Gemma attempt plus at most two Sol attempts; a Sol-only stage permits two.
+Quota/unavailable-model failures are never retried on the same model. Subscription
+marginal costs and quota multipliers remain unknown.
+
+The dashboard emits durable `workflow.plan`, `workflow.stage`, `workflow.record`,
+and `workflow.summary` events. Usage is recorded once per completed session,
+including failures; missing counts and subscription costs remain unknown.
+Ponytail is pinned and injection-checked for every agent session. Tool output is
+capped at 200 lines/12,000 bytes, automatic compaction retains 8,000 recent tokens,
+and idle warming is disabled. These reduce avoidable context, not a measured
+guarantee of lower total cost.
+
+Unavailable/quota-exhausted models are skipped for later stages of the same build.
+A planning fallback carries the host's actual failure as the escalation reason;
+the host does not buy another model turn merely to repeat that known reason.
+
+For backend projects the host requires a runtime manifest with functional checks,
+starts temporary confined services and a managed database when declared, runs
+the checks, then joins service cleanup. Static projects only have their HTML
+entry validated; no browser-interaction claim is made. Generated checks remain
+untrusted and may miss requirements. The user starts services for use separately.
+
+Builds have no overall time limit by default (`-timeout 0`); cancellation,
+startup/command timeouts, bounded stage retries, and repeated-tool-failure
+protection remain. Quiet model generation is not classified as a loop. Three
+identical failed tool operations without a successful edit stop an ACP session;
+recognized Chromium socket/GPU startup errors are grouped across launch commands.
+This deliberately does not claim to catch arbitrary reasoning or successful-tool loops.
+
+The Rust executor creates short, private, mode-0700 scratch directories and removes
+them when supervision ends. Only that directory is writable, not its temporary
+parent. Runtime read grants include PCI directory listing (not device targets),
+which Chromium's libpci initialization requires even with GPU rendering disabled.
 
 Ponytail injects instructions; it does not independently enforce quality, select
 models or meter billing. Configuration alone is not accepted as integration:

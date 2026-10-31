@@ -223,10 +223,7 @@ fn cmd_run(args: &[String], stream: bool) -> Result<i32, String> {
 
     // 1. The workspace must already exist.
     //
-    // Checked before anything is created, because the scratch directory below
-    // lives inside the workspace: creating it first would happily materialise a
-    // mistyped path and start a run against an empty directory instead of
-    // reporting the typo. Fail loudly rather than silently starting fresh.
+    // Validate before allocating private runtime scratch.
     if !workspace.is_dir() {
         return Err(format!(
             "workspace {} does not exist or is not a directory",
@@ -238,9 +235,9 @@ fn cmd_run(args: &[String], stream: bool) -> Result<i32, String> {
     let report = probe::require_confinement()?;
 
     // 3. Build and validate the policy, deny-by-default.
-    let scratch = prepare_scratch(&workspace)?;
+    let scratch = prepare_scratch()?;
 
-    let mut pol = Policy::workspace(&workspace);
+    let mut pol = Policy::workspace(&workspace).with_writable(&scratch.path);
     for r in &extra_read {
         pol = pol.with_read(r);
     }
@@ -306,7 +303,7 @@ fn cmd_run(args: &[String], stream: bool) -> Result<i32, String> {
     // 5. Run confined, with the scratch directory as its temporary space.
     let exe = command[0].clone();
     let rest: Vec<String> = command[1..].to_vec();
-    let scratch_s = scratch.to_string_lossy().into_owned();
+    let scratch_s = scratch.path.to_string_lossy().into_owned();
     let mut spec = RunSpec::new(&exe, &rest, &pol)
         .env("TMPDIR", &scratch_s)
         .env("TMP", &scratch_s)
@@ -430,24 +427,44 @@ extern "C" fn handle_term(_: libc::c_int) {
     pty::kill_child_group(libc::SIGKILL);
 }
 
-/// Create the workspace's private scratch directory and return it.
-///
-/// Build tools insist on a temporary directory, and the alternative - a shared
-/// `/tmp` - is both a cross-run information leak and an escape surface. Keeping
-/// it inside the workspace also means it inherits the same policy as everything
-/// else.
-///
-/// The directory is stable per workspace rather than unique per run, which is a
-/// deliberate trade: run-scoped uniqueness would need a per-run `mkdir` whose
-/// name is unpredictable, and `mktemp`-style schemes have a history of racing.
-/// The mode is 0700 so concurrent runs by the same user still cannot read each
-/// other's artifacts. Runs that must not share scratch should be given separate
-/// workspaces.
-fn prepare_scratch(workspace: &std::path::Path) -> Result<PathBuf, String> {
-    let scratch = workspace.join(".sandbox-tmp");
-    std::fs::create_dir_all(&scratch)
-        .map_err(|e| format!("create scratch {}: {e}", scratch.display()))?;
-    set_mode_0700(&scratch)?;
+/// Short, atomically created scratch avoids Linux's 108-byte Unix socket limit
+/// in Chromium. Grant only this private directory, never its shared parent.
+struct ScratchDir {
+    path: PathBuf,
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn prepare_scratch() -> Result<ScratchDir, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let preferred = std::path::Path::new("/tmp/opencode");
+    let base = if preferred.is_dir() {
+        preferred
+    } else {
+        std::path::Path::new("/tmp")
+    };
+    let template = base.join("hpx-XXXXXX");
+    let mut bytes = template.as_os_str().as_bytes().to_vec();
+    bytes.push(0);
+    // mkdtemp creates a new mode-0700 directory atomically; no name probing race.
+    let created = unsafe { libc::mkdtemp(bytes.as_mut_ptr().cast()) };
+    if created.is_null() {
+        return Err(format!(
+            "create private scratch: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let path = unsafe { std::ffi::CStr::from_ptr(created) }
+        .to_string_lossy()
+        .into_owned();
+    let scratch = ScratchDir {
+        path: PathBuf::from(path),
+    };
+    set_mode_0700(&scratch.path)?;
     Ok(scratch)
 }
 
@@ -530,4 +547,30 @@ fn started_ns() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn scratch_is_short_private_unique_and_removed() {
+        let first = prepare_scratch().unwrap();
+        let second = prepare_scratch().unwrap();
+        assert_ne!(first.path, second.path);
+        assert!(
+            first.path.as_os_str().len() + "/org.chromium.Chromium.XXXXXX/SingletonSocket".len()
+                < 108
+        );
+        assert_eq!(
+            std::fs::metadata(&first.path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let path = first.path.clone();
+        std::fs::write(path.join("test"), "temporary").unwrap();
+        drop(first);
+        assert!(!path.exists());
+        assert!(second.path.exists());
+    }
 }

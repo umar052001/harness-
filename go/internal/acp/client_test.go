@@ -110,6 +110,14 @@ func runFakeAgent(mode string) {
 			report("model-selection %s", string(m.Params))
 			send(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{}})
 		case "session/prompt":
+			if mode == "failure-loop" {
+				for i := 0; i < 3; i++ {
+					send(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+						"sessionId": sid, "update": map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": fmt.Sprint(i), "status": "failed", "kind": "execute", "title": "bash", "rawInput": map[string]any{"command": "npm test"}, "rawOutput": "same failure"},
+					}})
+				}
+				continue
+			}
 			if mode == "usage" {
 				for i := 0; i < 2; i++ {
 					send(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{

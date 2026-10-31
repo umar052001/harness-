@@ -22,11 +22,15 @@ type blockingRunner struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+	inspect func(context.Context, runner.Request)
 }
 
 func (b *blockingRunner) Registry() *harness.Registry { return b.reg }
 
 func (b *blockingRunner) Run(ctx context.Context, req runner.Request, emit func(runner.Event)) error {
+	if b.inspect != nil {
+		b.inspect(ctx, req)
+	}
 	b.once.Do(func() { close(b.started) })
 	select {
 	case <-b.release:

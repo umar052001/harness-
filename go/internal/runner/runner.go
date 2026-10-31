@@ -57,6 +57,7 @@ type Event struct {
 
 // Request is a run to perform.
 type Request struct {
+	AllowGPT bool `json:"allowGPT,omitempty"`
 	// Tooling is host-controlled configuration for the opt-in routed workflow.
 	Tooling *Tooling `json:"-"`
 	// DatabaseURL is supplied by the host service manager, never by HTTP input.
@@ -73,22 +74,11 @@ type Request struct {
 	// explicit, because it is the difference between a reviewer and a
 	// rubber stamp.
 	AutoApprove bool `json:"autoApprove,omitempty"`
-	// Timeout bounds the whole run. It is deliberately generous: a real request
-	// ("build me a portfolio site") is a sequence of installs, file writes and
-	// builds that can legitimately run for many minutes, and a deadline that
-	// kills productive work looks exactly like a broken product to the user.
+	// Timeout optionally bounds the run; zero leaves duration to the caller.
 	Timeout time.Duration `json:"-"`
 	// SandboxBinary is the executor path; empty uses the located default.
 	SandboxBinary string `json:"-"`
 }
-
-// defaultRunTimeout bounds a run that supplied no deadline.
-//
-// It is long on purpose. The work an agent is asked to do is real work: package
-// installs, a scaffold, a build. Cutting that off mid-flight throws away a
-// workspace the user paid for and reports it as a failure, so the ceiling is set
-// by patience rather than by the fastest possible task.
-const defaultRunTimeout = 20 * time.Minute
 
 // Runner performs runs.
 type Runner struct {
@@ -131,10 +121,11 @@ func (r *Runner) Run(ctx context.Context, req Request, emit func(Event)) error {
 	if err != nil {
 		return err
 	}
-	if req.Timeout <= 0 {
-		req.Timeout = defaultRunTimeout
+	runCtx, cancel := context.WithCancel(ctx)
+	if req.Timeout > 0 {
+		cancel()
+		runCtx, cancel = context.WithTimeout(ctx, req.Timeout)
 	}
-	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 
 	em := &emitter{emit: emit}
@@ -598,7 +589,9 @@ func reqWorkspace(req Request) string {
 // while the agent failed for an unrelated-looking reason. Filtering happens here
 // instead, because "this install method is not in use" is not a policy error.
 func RuntimeReadPaths() []string {
-	var candidates []string
+	// Chromium's libpci initialization exits if it cannot list this directory,
+	// even with --disable-gpu. Device symlink targets remain inaccessible.
+	candidates := []string{"/sys/bus/pci/devices"}
 	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates,
 			filepath.Join(home, ".local", "share", "mise", "installs"),

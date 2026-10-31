@@ -88,6 +88,13 @@ open('checked','w').write('yes')
 		if apps.Status("project").Active {
 			t.Fatal("processes survived stop")
 		}
+		// The next start exercises compatibility with generated root names;
+		// its unchanged checks must still reach the API through APP_URL.
+		m.Services[1].Name = "app"
+		raw, _ := json.Marshal(m)
+		if err := os.WriteFile(filepath.Join(dir, "ai-os.app.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// A failed functional check must tear down every service and never publish readiness.
 	m.Checks = []AppStep{{Command: []string{"python3", "-c", "raise SystemExit(9)"}}}

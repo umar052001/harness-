@@ -173,17 +173,18 @@ printf '\n%s10. Real toolchains still work%s\n' "$BOLD" "$OFF"
 # A sandbox that only runs cat and sh is not a sandbox worth having. These are
 # the workloads an agent actually performs.
 
-if [ -e "$WS/.sandbox-tmp" ]; then
+out="$(run sh -c 'test -d "$TMPDIR" && test "$(stat -c %a "$TMPDIR")" = 700 && echo PRIVATE_SCRATCH')"
+if [[ "$out" == *PRIVATE_SCRATCH* ]]; then
   ok "a private scratch directory is provisioned per run"
 else
   bad "no scratch directory was created"
 fi
 
-# TMPDIR must point inside the run, not at a shared world-writable /tmp.
+# Scratch has a short private path, not the shared temporary parent.
 out="$(run sh -c 'printf %s "$TMPDIR"')"
 case "$out" in
-  *"$WS"*) ok "TMPDIR is private to the workspace" ;;
-  *)       bad "TMPDIR escaped the workspace: ${out: -80}" ;;
+  *"/hpx-"*) ok "TMPDIR is short and private to the run" ;;
+  *)       bad "TMPDIR is not private scratch: ${out: -80}" ;;
 esac
 
 if command -v gcc >/dev/null 2>&1; then

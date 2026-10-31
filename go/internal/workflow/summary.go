@@ -38,9 +38,10 @@ func (b *Build) summary(passed bool) error {
 		for _, target := range []*ModelTotal{t, &aggregate} {
 			a := row.Accounting
 			target.Calls++
-			if a.Tokens == nil {
+			if a.Tokens == nil || a.Tokens.Input == nil || a.Tokens.Output == nil {
 				target.UnknownUsageCalls++
-			} else {
+			}
+			if a.Tokens != nil {
 				addCount(&target.Input, a.Tokens.Input)
 				addCount(&target.Output, a.Tokens.Output)
 				addCount(&target.CacheRead, a.Tokens.CacheRead)
@@ -66,5 +67,10 @@ func (b *Build) summary(passed bool) error {
 	if passed {
 		outcome = "passed"
 	}
-	return writeJSON(filepath.Join(b.Dir, "summary.json"), map[string]any{"outcome": outcome, "models": totals, "totals": aggregate, "note": "Provider-reported counts, not estimated from text. ACP cache/reasoning categories may overlap. Costs are dated-rate equivalents, not invoices. Unknown/subscription costs are excluded, never assumed zero."})
+	summary := map[string]any{"outcome": outcome, "models": totals, "totals": aggregate, "note": "Provider-reported counts, not estimated from text. ACP cache/reasoning categories may overlap. Costs are dated-rate equivalents, not invoices. Unknown/subscription costs are excluded, never assumed zero."}
+	if err := writeJSON(filepath.Join(b.Dir, "summary.json"), summary); err != nil {
+		return err
+	}
+	b.emit("workflow.summary", "Combined usage by model", summary)
+	return nil
 }

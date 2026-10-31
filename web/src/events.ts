@@ -258,6 +258,14 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
     const d = ev.data as Record<string, unknown> | undefined
     const evText = str(ev.text)
     switch (ev.kind) {
+      case 'workflow.record':
+      case 'workflow.stage':
+      case 'workflow.plan':
+        if (!started) started=Date.parse(ev.at)
+        summary.phase='working'
+        summary.step=evText
+        items.push({kind:'phase',id:`workflow-${ev.seq}`,title:evText,tone:'run',at:ev.at})
+        break
       case 'run.assigned':
         // The workspace id is handled by the caller; it is plumbing, not news.
         break
@@ -283,7 +291,7 @@ export function build(events: RunEvent[]): { items: Item[]; summary: Summary } {
       }
 
       case 'run.started':
-        started = Date.parse(ev.at) || Date.now()
+        if (!started) started = Date.parse(ev.at) || Date.now()
         items.push({
           kind: 'phase',
           id: `phase-start-${ev.seq}`,

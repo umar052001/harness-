@@ -7,8 +7,8 @@
 #
 # The three builds are ordered by cost: cargo is incremental, the frontend is a
 # second or two, and Go is last so a frontend failure stops before the server
-# binary is relinked. Nothing is installed; the script fails loudly if a tool is
-# missing rather than guessing at a version.
+# binary is relinked. Pinned JavaScript tools are installed from the lockfile;
+# system tools must already be installed.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +38,8 @@ fi
 echo "==> building server (go)"
 mkdir -p .build
 (cd go && go build -o ../.build/harness-server ./cmd/server)
+(cd go && go build -o ../.build/harness-build ./cmd/harness-build)
+npm ci --ignore-scripts --prefix .tools
 
 echo "==> harness++ on http://$addr"
 exec ./.build/harness-server \

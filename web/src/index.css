@@ -214,7 +214,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .empty-result p { max-width: 420px; font-size: 13px; line-height: 1.7; }
 .empty-result button { padding: 9px 18px; border: 1px solid #647455; border-radius: 9px; color: #d2e9bf; }
 .usage-panel { padding: 8px 18px; border-bottom: 1px solid #343b2f; font-size: 11px; color: #b9c6ac; flex-shrink: 0; max-height: 200px; overflow-y: auto; }
-.usage-panel summary { cursor: pointer; }
+.usage-panel summary { cursor: pointer; overflow-wrap: anywhere; }
 .usage-panel dl { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0; }
 .usage-panel dt { color: #a1ad94; }
 .usage-panel dd { margin: 0; color: #e0ead6; font-variant-numeric: tabular-nums; }

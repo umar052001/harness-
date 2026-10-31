@@ -214,7 +214,10 @@ func (a *Apps) Start(ctx context.Context, lifetime context.Context, bin, id, wor
 		listeners = append(listeners, l)
 		url := "http://" + l.Addr().String()
 		reserved = append(reserved, appProcess{service: service, address: url})
-		env = append(env, strings.ToUpper(service.Name)+"_URL="+url)
+		// APP_URL always belongs to the gateway, including a root service named app.
+		if service.Name != "app" {
+			env = append(env, strings.ToUpper(service.Name)+"_URL="+url)
+		}
 		if service.Route == "/" {
 			address = url
 		}

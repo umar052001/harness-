@@ -119,8 +119,11 @@ func LoadApp(workspace string) (AppManifest, error) {
 	names, routes := map[string]bool{}, map[string]bool{}
 	for i := range m.Services {
 		s := &m.Services[i]
-		if !serviceName.MatchString(s.Name) || names[s.Name] || s.Name == "app" || s.Name == "database" {
-			return m, errors.New("service names must be unique lowercase identifiers; app and database are reserved")
+		if !serviceName.MatchString(s.Name) || names[s.Name] || s.Name == "database" {
+			return m, errors.New("service names must be unique lowercase identifiers; database is reserved")
+		}
+		if s.Name == "app" && s.Route != "/" {
+			return m, errors.New("service name app is only allowed for the root route /")
 		}
 		names[s.Name] = true
 		if !strings.HasPrefix(s.Route, "/") || path.Clean(s.Route) != s.Route || strings.ContainsAny(s.Route, "?#\\") || routes[s.Route] {

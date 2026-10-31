@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,10 +11,15 @@ import (
 
 	"github.com/umar052001/ai-os/go/internal/api"
 	"github.com/umar052001/ai-os/go/internal/harness"
+	"github.com/umar052001/ai-os/go/internal/runner"
 )
 
 func TestStopPersistsTerminalStateAndReleasesSlot(t *testing.T) {
-	br := &blockingRunner{reg: harness.Load(), started: make(chan struct{}), release: make(chan struct{})}
+	deadline := make(chan bool, 1)
+	br := &blockingRunner{reg: harness.Load(), started: make(chan struct{}), release: make(chan struct{}), inspect: func(ctx context.Context, req runner.Request) {
+		_, limited := ctx.Deadline()
+		deadline <- limited || req.Timeout != 0
+	}}
 	server := api.New(br, api.Options{WorkspacesDir: t.TempDir()})
 	s := httptest.NewServer(server.Handler())
 	defer s.Close()
@@ -23,6 +29,9 @@ func TestStopPersistsTerminalStateAndReleasesSlot(t *testing.T) {
 	}
 	defer res.Body.Close()
 	<-br.started
+	if <-deadline {
+		t.Fatal("default run acquired an overall deadline")
+	}
 	active, err := http.Get(s.URL + "/api/runs/active")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +96,7 @@ func TestStopPersistsTerminalStateAndReleasesSlot(t *testing.T) {
 	}
 }
 
-func TestRejectsUnboundedTimeoutAndForeignOrigin(t *testing.T) {
+func TestRejectsInvalidTimeoutAndForeignOrigin(t *testing.T) {
 	s := newTestServer(t)
 	for _, body := range []string{`{"harnessId":"api-fake","prompt":"x","timeoutSec":-1}`, `{"harnessId":"api-fake","prompt":"x","timeoutSec":9223372036854775807}`} {
 		res, err := http.Post(s.URL+"/api/run", "application/json", strings.NewReader(body))

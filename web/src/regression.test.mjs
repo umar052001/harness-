@@ -3,6 +3,19 @@ import assert from 'node:assert/strict'
 import { streamRun } from './api.ts'
 import { build } from './events.ts'
 
+test('routing decisions are visible and stage switches do not reset elapsed time',()=>{
+  const {items,summary}=build([
+    {kind:'workflow.record',seq:1,at:'2026-01-01T00:00:00Z',text:'planning-routing: complete'},
+    {kind:'workflow.stage',seq:2,at:'2026-01-01T00:00:01Z',text:'ollama/gemma4:cloud'},
+    {kind:'run.started',seq:3,at:'2026-01-01T00:00:02Z'},
+    {kind:'workflow.record',seq:4,at:'2026-01-01T00:00:05Z',text:'fallback: openai/gpt-6.1-sol'},
+    {kind:'run.started',seq:5,at:'2026-01-01T00:00:06Z'},
+    {kind:'run.finished',seq:6,at:'2026-01-01T00:00:10Z',data:{ok:true,status:'completed'}},
+  ])
+  assert.equal(summary.elapsedSec,10)
+  assert.ok(items.some(i=>i.title==='fallback: openai/gpt-6.1-sol'))
+})
+
 test('network failure, abort, and truncated streams cannot look successful', async t => {
   const original = globalThis.fetch
   t.after(() => { globalThis.fetch = original })

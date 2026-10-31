@@ -29,9 +29,6 @@ import (
 // protocolVersion is the ACP version this client implements.
 const protocolVersion = 1
 
-// defaultPromptTimeout bounds a prompt when the caller supplies no deadline.
-const defaultPromptTimeout = 10 * time.Minute
-
 // Event is something the agent reported as a run progressed.
 //
 // The type is deliberately coarse. A UI wants to know "the agent said this",
@@ -147,7 +144,9 @@ type Options struct {
 // not needed here, and a fresh process per run means one run's state cannot leak
 // into the next, which matters more than the cost of a spawn.
 type Client struct {
-	cmd *process
+	loopError chan error
+	guard     failureGuard
+	cmd       *process
 	// writeMu guards both frame writes and the request id counter, so a
 	// notification cannot interleave mid-line with a request.
 	writeMu sync.Mutex
@@ -263,6 +262,7 @@ func handshake(ctx context.Context, p *process, opts Options) (*Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	c := &Client{
+		loopError:      make(chan error, 1),
 		cmd:            p,
 		pending:        map[int64]chan *message{},
 		readDone:       make(chan struct{}),
@@ -392,21 +392,8 @@ func (c *Client) Prompt(ctx context.Context, prompt string) (Result, error) {
 	if strings.TrimSpace(prompt) == "" {
 		return Result{}, errors.New("acp: prompt is empty")
 	}
-	// A prompt is bounded even if the caller supplied no deadline: an agent that
-	// never returns a stop reason would otherwise hold a slot forever.
-	//
-	// The bound only applies when the caller has none. Wrapping an existing
-	// deadline would silently clamp it - a caller asking for twenty minutes got
-	// ten, and the request then died at the shorter limit while the agent was
-	// still working. One deadline, owned by the caller, is the only version of
-	// this that cannot surprise anyone.
-	runCtx := ctx
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, defaultPromptTimeout)
-		defer cancel()
-	}
-
+	// The caller owns cancellation and any optional deadline. Quiet generation
+	// is not evidence of a loop and must not acquire a hidden prompt time limit.
 	start := time.Now()
 
 	// The request/response is a single blocking call. Events keep flowing during
@@ -416,10 +403,17 @@ func (c *Client) Prompt(ctx context.Context, prompt string) (Result, error) {
 		StopReason string          `json:"stopReason"`
 		Usage      json.RawMessage `json:"usage"`
 	}
-	callErr := c.call(runCtx, "session/prompt", map[string]any{
+	callErr := c.call(ctx, "session/prompt", map[string]any{
 		"sessionId": c.sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": prompt}},
 	}, &promptResult)
+	if callErr == nil {
+		// A terminal response must not win a select race against the loop guard.
+		select {
+		case callErr = <-c.loopError:
+		default:
+		}
+	}
 
 	// Every notification that preceded the response has already been handled:
 	// the reader is the only writer to coll and it processes frames in order, so

@@ -12,6 +12,8 @@ server:
 	cargo build --release --manifest-path rust/sandboxd/Cargo.toml
 	mkdir -p .build
 	cd go && go build -o ../.build/harness-server ./cmd/server
+	cd go && go build -o ../.build/harness-build ./cmd/harness-build
+	npm ci --ignore-scripts --prefix .tools
 
 workflow:
 	cargo build --release --manifest-path rust/sandboxd/Cargo.toml

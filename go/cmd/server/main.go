@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -27,14 +28,22 @@ import (
 
 func main() {
 	var (
-		addr     = flag.String("addr", "127.0.0.1:8091", "listen address")
-		webdir   = flag.String("web", "", "built frontend directory to serve (optional)")
-		sandboxd = flag.String("sandboxd", "", "path to sandboxd (default: located binary)")
-		overlay  = flag.String("harness-overlay", "", "directory of harness manifests to overlay")
-		origins  = flag.String("origins", defaultOrigins, "comma-separated CORS allow-list")
-		workRoot = flag.String("workspaces", "", "where run workspaces are created (default: ~/.local/share/harness++/workspaces)")
+		addr         = flag.String("addr", "127.0.0.1:8091", "listen address")
+		webdir       = flag.String("web", "", "built frontend directory to serve (optional)")
+		sandboxd     = flag.String("sandboxd", "", "path to sandboxd (default: located binary)")
+		overlay      = flag.String("harness-overlay", "", "directory of harness manifests to overlay")
+		origins      = flag.String("origins", defaultOrigins, "comma-separated CORS allow-list")
+		workRoot     = flag.String("workspaces", "", "where run workspaces are created (default: ~/.local/share/harness++/workspaces)")
+		workflowRoot = flag.String("workflow-root", "", "harness++ checkout for routed builds (default: binary parent)")
 	)
 	flag.Parse()
+	if *workflowRoot == "" {
+		binary, err := os.Executable()
+		if err != nil {
+			log.Fatal(err)
+		}
+		*workflowRoot = filepath.Dir(filepath.Dir(binary))
+	}
 
 	if *sandboxd == "" {
 		*sandboxd = exec.DefaultBinary()
@@ -52,6 +61,7 @@ func main() {
 
 	run := runner.New(reg, *sandboxd)
 	srv := api.New(run, api.Options{
+		WorkflowRoot:  *workflowRoot,
 		SandboxBinary: *sandboxd,
 		// The planner is optional: it only exists when OLLAMA_API_KEY does, and
 		// the API reports it as unconfigured instead of pretending otherwise.

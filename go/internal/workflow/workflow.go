@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/umar052001/ai-os/go/internal/environment"
 	sbx "github.com/umar052001/ai-os/go/internal/exec"
 	"github.com/umar052001/ai-os/go/internal/harness"
 	"github.com/umar052001/ai-os/go/internal/runner"
@@ -24,14 +25,22 @@ import (
 )
 
 type Options struct {
-	Root     string
-	Store    string
-	Source   string
-	Registry string
-	Prompt   string
-	Check    []string
-	AllowGPT bool
-	Timeout  time.Duration
+	// Host-only integration points; never decode these from HTTP input.
+	Workspace   string
+	Binary      string
+	Sandbox     string
+	Model       string
+	DatabaseURL string
+	Verify      func(context.Context) error
+	Emit        func(runner.Event)
+	Root        string
+	Store       string
+	Source      string
+	Registry    string
+	Prompt      string
+	Check       []string
+	AllowGPT    bool
+	Timeout     time.Duration
 }
 type Record struct {
 	At         time.Time   `json:"at"`
@@ -63,8 +72,8 @@ type Build struct {
 }
 
 func New(opt Options) (*Build, error) {
-	if opt.Timeout <= 0 || opt.Timeout > 30*time.Minute || len(opt.Check) == 0 {
-		return nil, errors.New("a check command and deadline up to 30 minutes are required")
+	if opt.Timeout < 0 || opt.Timeout > 30*time.Minute || (len(opt.Check) == 0 && opt.Verify == nil) {
+		return nil, errors.New("a check command is required; optional deadline must be 0–30 minutes")
 	}
 	root, err := filepath.Abs(opt.Root)
 	if err != nil {
@@ -79,6 +88,12 @@ func New(opt Options) (*Build, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opt.Model != "" {
+		m, ok := r.Model(opt.Model)
+		if !ok || !m.Enabled || (m.Provider == "openai" && !opt.AllowGPT) {
+			return nil, errors.New("selected model is disabled, unknown, or needs GPT permission")
+		}
+	}
 	var id [6]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
@@ -89,6 +104,15 @@ func New(opt Options) (*Build, error) {
 		return nil, err
 	}
 	b := &Build{opt: opt, registry: r, Dir: dir, workspace: filepath.Join(dir, "project"), binary: binary, sandbox: filepath.Join(root, "rust/sandboxd/target/release/sandboxd"), path: runner.RuntimePath()}
+	if opt.Workspace != "" {
+		b.workspace = opt.Workspace
+	}
+	if opt.Binary != "" {
+		b.binary = opt.Binary
+	}
+	if opt.Sandbox != "" {
+		b.sandbox = opt.Sandbox
+	}
 	b.home = filepath.Join(b.workspace, ".home")
 	if err := os.MkdirAll(b.home, 0700); err != nil {
 		return nil, err
@@ -180,7 +204,19 @@ func (b *Build) record(r Record) error {
 	r.At = time.Now().UTC()
 	b.records = append(b.records, r)
 	fmt.Printf("%s: %s\n", r.Phase, r.Result)
-	return writeJSON(filepath.Join(b.Dir, "ledger.json"), b.records)
+	if err := writeJSON(filepath.Join(b.Dir, "ledger.json"), b.records); err != nil {
+		return err
+	}
+	b.emit("workflow.record", r.Phase+": "+r.Result, r)
+	return nil
+}
+
+func (b *Build) emit(kind, text string, data any) {
+	if b.opt.Emit == nil {
+		return
+	}
+	raw, _ := json.Marshal(data)
+	b.opt.Emit(runner.Event{Kind: kind, At: time.Now(), Text: text, Data: raw})
 }
 
 type boundedOutput struct {
@@ -203,7 +239,11 @@ func (o *boundedOutput) Write(p []byte) (int, error) {
 }
 func (o *boundedOutput) String() string { o.mu.Lock(); defer o.mu.Unlock(); return string(o.data) }
 func (b *Build) env() []string {
-	return []string{"PATH=" + b.path, "HOME=" + b.home, "XDG_CONFIG_HOME=" + filepath.Join(b.home, ".config"), "XDG_DATA_HOME=" + filepath.Join(b.home, ".local/share"), "XDG_CACHE_HOME=" + filepath.Join(b.home, ".cache"), "CI=1", "GOTOOLCHAIN=local"}
+	env := []string{"PATH=" + b.path, "HOME=" + b.home, "XDG_CONFIG_HOME=" + filepath.Join(b.home, ".config"), "XDG_DATA_HOME=" + filepath.Join(b.home, ".local/share"), "XDG_CACHE_HOME=" + filepath.Join(b.home, ".cache"), "CI=1", "GOTOOLCHAIN=local"}
+	if b.opt.DatabaseURL != "" {
+		env = append(env, "DATABASE_URL="+b.opt.DatabaseURL)
+	}
+	return env
 }
 
 func (b *Build) command(ctx context.Context, argv []string) (string, error) {
@@ -227,8 +267,8 @@ func (b *Build) command(ctx context.Context, argv []string) (string, error) {
 	}
 	if code != 0 {
 		text := stderr.String()
-		if len(text) > 3000 {
-			text = text[len(text)-3000:]
+		if len(text) > 1200 {
+			text = text[len(text)-1200:]
 		}
 		return "", fmt.Errorf("sandbox command %s exited %d: %s", argv[0], code, text)
 	}
@@ -265,16 +305,18 @@ escalation (string or null). Small changes need ONE implementation stage includi
 tests. Prefer enabled open-weight models by priority. Use exact registered IDs.
 GPT needs explicit permission and a complexity/security/quality justification.
 Avoid unnecessary stages, model switches or retries. State reasonable assumptions;
-ask questions only for materially blocking ambiguity. Do not invent prices or access.`
+ask questions only for materially blocking ambiguity. Do not invent prices or access.
+Among suitable models prefer lower priority numbers; do not select a larger GPT
+when the registered smaller subscription alternative is sufficient.`
 
-func (b *Build) plan(ctx context.Context, raw, graph string) (Plan, error) {
+func (b *Build) planGemma(ctx context.Context, raw, graph string) (Plan, error) {
 	var eligible []Model
 	for _, m := range b.registry.Models {
 		if m.Enabled && (b.opt.AllowGPT || m.Provider != "openai") {
 			eligible = append(eligible, m)
 		}
 	}
-	contextData, _ := json.Marshal(map[string]any{"task": raw, "graphify": graph, "registry": eligible})
+	contextData, _ := json.Marshal(map[string]any{"task": raw, "runtimeContract": environment.AppInstructions, "graphify": graph, "registry": eligible})
 	model, _ := b.registry.Model(b.registry.Router)
 	request := CloudRequest{Model: model.ProviderModelID, Messages: []Message{{Role: "system", Content: planningPrompt}, {Role: "user", Content: string(contextData)}}}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -329,7 +371,13 @@ func (b *Build) agent(ctx context.Context, stage Stage, p Plan, feedback string)
 	}
 	raw, _ := json.Marshal(p)
 	check, _ := json.Marshal(b.opt.Check)
-	prompt := fmt.Sprintf(`Follow this engineering plan. Stage: %s. Task: %s
+	verification := "Host acceptance command (do not weaken it or its test files): " + string(check)
+	if b.opt.Verify != nil {
+		verification = "The host will independently validate ai-os.app.json, start sandboxed services, and run its declared functional checks after generation. Backend projects without checks fail. Static projects only have their HTML entry validated."
+	}
+	prompt := fmt.Sprintf(`%s
+Original user requirements and runtime instructions: %s
+Follow this engineering plan. Stage: %s. Task: %s
 Before editing or running shell, use the graphify MCP query_graph tool for relevant
 symbols. If tools are not directly listed, use execute search({namespace:"graphify",
 query:"query_graph"}), then call the returned exact tool path. Never skip Graphify.
@@ -339,15 +387,19 @@ research or passing tests. Record new evidence that changes the plan in PLAN-UPD
 No nested agents or credential/config changes. Do not edit .home or graphify-out.
 Plan: %s
 Prior failure evidence: %s
-Run tests. Host acceptance command (do not weaken it or its test files): %s`, stage.TaskType, stage.Task, raw, feedback, check)
+Run tests. %s`, environment.AppInstructions, b.opt.Prompt, stage.TaskType, stage.Task, raw, feedback, verification)
 	var mu sync.Mutex
 	var events []runner.Event
 	var report usage.Report
 	graphCompleted := false
-	err := runner.New(harness.Load(), b.sandbox).Run(ctx, runner.Request{HarnessID: "opencode", Workspace: b.workspace, Prompt: prompt, Models: []string{stage.Model}, AutoApprove: true, Timeout: 10 * time.Minute, Tooling: b.tooling}, func(e runner.Event) {
+	b.emit("workflow.stage", stage.Model+": "+stage.Task, stage)
+	err := runner.New(harness.Load(), b.sandbox).Run(ctx, runner.Request{HarnessID: "opencode", Workspace: b.workspace, Prompt: prompt, Models: []string{stage.Model}, DatabaseURL: b.opt.DatabaseURL, AutoApprove: true, Tooling: b.tooling}, func(e runner.Event) {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, e)
+		if b.opt.Emit != nil && e.Kind != runner.KindRunFinished && e.Kind != runner.KindUsage && e.Kind != "error" {
+			b.opt.Emit(e)
+		}
 		if e.Kind == runner.KindUsage {
 			var payload struct {
 				Usage usage.Report `json:"usage"`
@@ -394,7 +446,12 @@ Run tests. Host acceptance command (do not weaken it or its test files): %s`, st
 }
 
 func (b *Build) Run(ctx context.Context) (err error) {
-	ctx, cancel := context.WithTimeout(ctx, b.opt.Timeout)
+	parent := ctx
+	ctx, cancel := context.WithCancel(parent)
+	if b.opt.Timeout > 0 {
+		cancel()
+		ctx, cancel = context.WithTimeout(parent, b.opt.Timeout)
+	}
 	defer cancel()
 	fmt.Println("Build:", b.Dir)
 	defer func() { err = errors.Join(err, b.summary(err == nil)) }()
@@ -406,6 +463,11 @@ func (b *Build) Run(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	p = b.routePlan(p)
+	if err := writeJSON(filepath.Join(b.Dir, "plan.json"), p); err != nil {
+		return err
+	}
+	b.emit("workflow.plan", "Engineering plan and routes", p)
 	if err := b.runStages(ctx, p, b.runStage); err != nil {
 		return err
 	}
@@ -421,7 +483,12 @@ func (b *Build) runStage(ctx context.Context, stage Stage, p Plan, feedback stri
 		return err
 	}
 	if final {
-		if _, err := b.command(ctx, b.opt.Check); err != nil {
+		if b.opt.Verify != nil {
+			if err := b.opt.Verify(ctx); err != nil {
+				return err
+			}
+			return b.record(Record{Phase: "validation", Result: "host runtime checks passed for backend app, or static entry validated (static interaction not tested)"})
+		} else if _, err := b.command(ctx, b.opt.Check); err != nil {
 			return err
 		}
 		return b.record(Record{Phase: "validation", Result: "acceptance command passed"})
@@ -433,19 +500,47 @@ func (b *Build) runStage(ctx context.Context, stage Stage, p Plan, feedback stri
 // tests can inject provider and quality failures without buying model tokens.
 func (b *Build) runStages(ctx context.Context, p Plan, execute func(context.Context, Stage, Plan, string, bool) error) error {
 	for index, stage := range p.Stages {
+		if model, ok := b.registry.Model(stage.Model); ok && !model.Enabled {
+			next := b.registry.Fallback(stage.Model, nil, b.opt.AllowGPT)
+			if next == "" {
+				return fmt.Errorf("model %s unavailable and no authorized fallback remains", stage.Model)
+			}
+			stage.Model = next
+			stage.Escalation = "provider unavailable earlier in this build"
+			if err := b.record(Record{Phase: "fallback", Model: next, Reason: stage.Escalation, Result: "skip unavailable provider for next stage"}); err != nil {
+				return err
+			}
+		}
 		tried := []string{}
 		feedback := "none"
+		solAttempts := 0
 		for attempt := 0; attempt < b.registry.Policy.MaxAttempts; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			tried = append(tried, stage.Model)
+			if stage.Model == "openai/gpt-6.1-sol" {
+				solAttempts++
+			}
 			err := execute(ctx, stage, p, feedback, index == len(p.Stages)-1)
 			if err == nil {
 				break
 			}
 			feedback = err.Error()
+			if unavailableProvider(feedback) {
+				for i := range b.registry.Models {
+					if b.registry.Models[i].ID == stage.Model {
+						b.registry.Models[i].Enabled = false
+					}
+				}
+			}
 			if e := b.record(Record{Phase: "attempt-failed", Model: stage.Model, Result: feedback}); e != nil {
 				return e
 			}
 			next := b.registry.Fallback(stage.Model, tried, b.opt.AllowGPT)
+			if next == "" && stage.Model == "openai/gpt-6.1-sol" && b.opt.AllowGPT && !unavailableProvider(feedback) && solAttempts < 2 {
+				next = stage.Model
+			}
 			if next == "" || attempt+1 == b.registry.Policy.MaxAttempts || ctx.Err() != nil {
 				return err
 			}
@@ -459,6 +554,41 @@ func (b *Build) runStages(ctx context.Context, p Plan, execute func(context.Cont
 		}
 	}
 	return nil
+}
+
+// Automatic policy is host-owned: one initial Gemma stage, then Sol for the
+// remaining work and repairs. A planner cannot select a more expensive model.
+func (b *Build) routePlan(p Plan) Plan {
+	for i := range p.Stages {
+		model := b.opt.Model
+		reason := "operator-selected model"
+		if model == "" {
+			model = b.registry.Router
+			reason = "Gemma handles initial implementation"
+			router, _ := b.registry.Model(model)
+			if b.opt.AllowGPT && (i > 0 || !router.Enabled) {
+				model = "openai/gpt-6.1-sol"
+				reason = "operator policy: Sol handles follow-up work and repairs"
+			}
+		}
+		p.Stages[i].Model = model
+		p.Stages[i].Reason = reason
+		p.Stages[i].Escalation = ""
+		if strings.HasPrefix(model, "openai/") {
+			p.Stages[i].Escalation = reason
+		}
+	}
+	return p
+}
+
+func unavailableProvider(message string) bool {
+	message = strings.ToLower(message)
+	for _, marker := range []string{"provider.quota", "model_not_found", "usage limit reached", "http 429", "authentication required"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func copySource(source, destination string) error {

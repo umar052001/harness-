@@ -42,6 +42,7 @@ export interface RunEvent {
 }
 
 export interface RunRequest {
+	allowGPT?: boolean
 	parentRunId?: string
   harnessId: string
   prompt: string

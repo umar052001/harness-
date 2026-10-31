@@ -379,8 +379,8 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	timeoutC := timer.C
-	// ACP need not emit progress while generating tool arguments. Prompt owns
-	// a total deadline, so silence alone is not evidence that its agent is stuck.
+	// ACP need not emit progress while generating tool arguments. Only the
+	// caller may impose a prompt deadline; silence alone is not a loop.
 	if method == "session/prompt" {
 		timer.Stop()
 		timeoutC = nil
@@ -393,6 +393,8 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	// still arriving.
 	for {
 		select {
+		case err := <-c.loopError:
+			return err
 		case <-ctx.Done():
 			// Close releases a blocked pipe writer as well as the process.
 			_ = c.Close()

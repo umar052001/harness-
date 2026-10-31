@@ -4,11 +4,12 @@ import Artifacts from './Artifacts'
 import ChatBar from './ChatBar'
 import SettingsDrawer from './Settings'
 import Usage from './Usage'
+import Workflow from './Workflow'
 import Database from './Database'
 import { latestUsage } from './usage'
 import { build, localSentence } from './events'
 import { PORTFOLIO_PROMPT } from './demo'
-import { fetchActive, fetchHarnesses, fetchHealth, fetchRunEvents, fetchRuns, stopRun, streamRun } from './api'
+import { fetchActive, fetchHarnesses, fetchHealth, fetchRunEvents, fetchRuns, fetchWorkflow, stopRun, streamRun } from './api'
 import type { ActiveRun, Harness, Health, RunEvent, RunSummary } from './types'
 
 type Pane = 'preview' | 'logs'
@@ -18,7 +19,9 @@ export default function App() {
   const [harnesses, setHarnesses] = createSignal<Harness[]>([])
   const [selected, setSelected] = createSignal('opencode')
   const [model, setModel] = createSignal('')
-  const [autoApprove, setAutoApprove] = createSignal(false)
+  const [autoApprove, setAutoApprove] = createSignal(true)
+  const [allowGPT, setAllowGPT] = createSignal(true)
+  const [workflowModels,setWorkflowModels]=createSignal<{id:string;provider:string}[]>([])
   const [prompt, setPrompt] = createSignal('')
   const [events, setEvents] = createSignal<RunEvent[]>([])
   const [running, setRunning] = createSignal(false)
@@ -31,7 +34,7 @@ export default function App() {
   const [files, setFiles] = createSignal(0)
   const [pane, setPane] = createSignal<Pane>('preview')
   const [settingsOpen, setSettingsOpen] = createSignal(false)
-  const [timeLimit, setTimeLimit] = createSignal(600)
+  const [timeLimit, setTimeLimit] = createSignal(0)
   const [now, setNow] = createSignal(Date.now())
   const [started, setStarted] = createSignal(0)
   const [loading, setLoading] = createSignal(true)
@@ -65,11 +68,12 @@ export default function App() {
   async function connect() {
     setLoading(true)
     try {
-      const [h, agents] = await Promise.all([fetchHealth(), fetchHarnesses()])
+      const [h, agents, routing] = await Promise.all([fetchHealth(), fetchHarnesses(), fetchWorkflow()])
       if (disposed) return
       batch(() => {
         setHealth(h)
         setHarnesses(agents)
+        setWorkflowModels(routing.models)
         if (!agents.some(a => a.id === selected() && a.installed)) {
           setSelected(agents.find(a => a.id === 'opencode' && a.installed)?.id || agents.find(a => a.installed)?.id || '')
         }
@@ -145,7 +149,7 @@ export default function App() {
       const result = await streamRun({ harnessId: selected(), prompt: prompt().trim(),
         parentRunId: parentRunId(),
         models: model().trim() ? [model().trim()] : undefined,
-        autoApprove: autoApprove(), timeoutSec: timeLimit() }, ev => {
+        autoApprove: autoApprove(), allowGPT:allowGPT(), timeoutSec: timeLimit() }, ev => {
         if (disposed) return
         if (ev.kind === 'run.assigned' && ev.runId) setRunId(ev.runId)
         pending.push(ev)
@@ -216,14 +220,16 @@ export default function App() {
                 <p>Describe what you want to build. An agent works in its own sandbox.<br class="desktop-break" /> Watch it take shape, then preview and keep every file.</p>
                 <div class="workflow" aria-label="How harness++ works"><span><b>01</b> Describe</span><i>→</i><span><b>02</b> Build safely</span><i>→</i><span><b>03</b> Make it yours</span></div>
               </div>
-              <div class="welcome-footer"><span>OpenCode / Big Pickle</span><span>Saved locally · Export anytime</span></div>
+              <div class="welcome-footer"><span>Gemma-first · Subscription GPT fallback · Ponytail</span><span>Saved locally · Export anytime</span></div>
             </div>
           }>
             <div class="stage-tabs" role="group" aria-label="Workspace view">
               <For each={['preview', 'logs'] as Pane[]}>{p => <button aria-pressed={pane() === p} onClick={() => setPane(p)}>{p === 'preview' ? 'Preview' : 'Activity'}<Show when={p === 'logs' && isLive()}><i class="live-dot" /></Show></button>}</For>
             </div>
             <div class="run-status" aria-live="polite"><span class={`status-pill ${isLive() ? 'building' : ''}`}>{status() === 'completed' ? 'Code generated' : status().replace('_', ' ')}</span><span class="run-sentence">{isLive() ? localSentence(summary()) : current()?.error || `${files()} files saved in your workspace`}</span><span class="run-time">{Math.floor(elapsed() / 60)}:{String(elapsed() % 60).padStart(2, '0')}</span></div>
-            <Usage report={usage()} model={current()?.model || (running() ? model() || 'opencode/big-pickle' : 'Model not recorded')} />
+            <Show when={events().some(e=>e.kind.startsWith('workflow.'))} fallback={<Usage report={usage()} model={current()?.model || 'Model not recorded'} />}>
+              <Workflow events={events()} />
+            </Show>
             <Show when={runId()}><Database runId={runId()} running={isLive()} /></Show>
             <div class={`stage-pane ${pane() === 'preview' ? '' : 'hidden'}`}>
               <Artifacts runId={runId()} running={isLive()} active={active()} onFiles={setFiles} />
@@ -236,11 +242,12 @@ export default function App() {
       <ChatBar prompt={prompt()} onPrompt={setPrompt} onRun={() => void run()} onStop={() => void stop()}
         onSettings={() => setSettingsOpen(true)} running={running()} ready={ready() && active().length === 0}
         harness={selectedHarness()} autoApprove={autoApprove()} onAutoApprove={setAutoApprove}
-        model={model() || (selected() === 'opencode' ? 'Big Pickle' : 'Agent default')}
+        model={model() || (selected() === 'opencode' ? 'Automatic · Gemma-first' : 'Agent default')}
         elapsedSec={elapsed()} />
       <SettingsDrawer open={settingsOpen()} onClose={() => setSettingsOpen(false)} harnesses={harnesses()}
         selected={selected()} onSelect={id => { setSelected(id); setModel('') }} autoPicked={false}
         model={model()} onModel={setModel} autoApprove={autoApprove()} onAutoApprove={setAutoApprove}
+        workflowModels={workflowModels()} allowGPT={allowGPT()} onAllowGPT={setAllowGPT}
         timeLimitSec={timeLimit()} onTimeLimit={setTimeLimit} fatal={fatal()}
         onDemoPrompt={() => { setPrompt(PORTFOLIO_PROMPT); setSettingsOpen(false) }} />
     </div>

@@ -96,8 +96,23 @@ events. Merely listing the tools in a configuration is not considered success.
 
 The dashboard runs on **http://127.0.0.1:8091**, with a separate workspace store at
 `~/.local/share/harness++/workspaces`. This keeps it apart from other checkouts.
-The routed workflow above is currently a **CLI path**; dashboard Build remains the
-single-model runner and must not be mistaken for the new orchestrator.
+Dashboard OpenCode Build uses the same routed workflow: Gemma planning, registered
+model choices, bounded fallback, mandatory Graphify and pinned Ponytail injection.
+Settings offers Automatic (Gemma-first), enabled model overrides, and an explicit
+ChatGPT-subscription permission toggle. Big Pickle and the account-rejected
+GPT-5.5 and operator-disallowed Astra are disabled. Automatic builds use Gemma for
+planning and initial implementation, then only GPT-6.1 Sol for follow-up stages
+and repairs. Sol gets at most two attempts per stage; quota errors are not retried.
+Subscription quota and marginal cost remain unknown.
+Plans, fallback reasons, session usage and combined per-model accounting survive
+reload through the durable event log. Host-owned reports live under
+`workspaces/.workflow`, outside writable project directories.
+
+Backend builds require a valid runtime manifest and functional checks. The host
+starts temporary confined services and managed PostgreSQL when declared, runs
+the checks, and stops verification services. **Build & start app** starts the
+app for use afterwards. Static builds currently validate the HTML entry only;
+interactive correctness still needs browser testing.
 
 The existing runtime supports persistent workspaces, background jobs, local preview
 origins, rootless PostgreSQL, multi-service app builds and functional checks. See
@@ -122,8 +137,8 @@ usage remain unknown. There is no claim of savings without a comparable baseline
 
 ## Boundaries
 
-- One sequential workflow, at most three planned stages and two attempts per stage.
-- An overall deadline bounds the workflow; no indefinite model retry loop.
+- One sequential workflow, at most three planned stages and three attempts per stage (one Gemma plus up to two Sol attempts; a Sol-only stage gets at most two).
+- No overall deadline by default; Stop/cancellation still works. Optional deadlines and bounded model retries remain available. Three repeated identical tool failures (or recognized Chromium startup failures) without a successful edit stop an ACP session; this is not a detector for every possible loop.
 - Linux Landlock filesystem confinement and `no_new_privs`; no agent CPU/memory cap.
 - Host-owned reports are outside the writable project. Tool output and code remain
   untrusted; plugin observations are operational evidence, not tamper-proof proof.

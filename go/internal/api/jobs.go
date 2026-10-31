@@ -27,7 +27,19 @@ func (s *Server) beginJob() bool {
 // caller owns the worker lifetime; the runner returns only after agent cleanup.
 func (s *Server) executeJob(ctx context.Context, req runner.Request, id string, meta RunMetadata, record func([]byte), sink *sseSink) {
 	var usageMu sync.Mutex
-	err := s.run.Run(ctx, req, func(ev runner.Event) {
+	execute := s.run.Run
+	if req.HarnessID == "opencode" && s.workflowRoot != "" {
+		execute = func(ctx context.Context, req runner.Request, emit func(runner.Event)) error {
+			return s.runWorkflow(ctx, req, meta.ProjectID, emit)
+		}
+	}
+	var eventMu sync.Mutex
+	seq := 0
+	err := execute(ctx, req, func(ev runner.Event) {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		seq++
+		ev.Seq = seq
 		if ev.Kind == runner.KindUsage {
 			var report struct {
 				Usage *usage.Report `json:"usage"`

@@ -121,6 +121,12 @@ func (c *Client) onSessionUpdate(raw json.RawMessage) {
 		base.Tool = c.toolDetail(upd)
 		base.Raw = raw
 		c.emit(base)
+		if err := c.guard.observe(upd.ToolCallID, base.Tool); err != nil && c.loopError != nil {
+			select {
+			case c.loopError <- err:
+			default:
+			}
+		}
 
 	case "plan":
 		base.Type = EventPlan

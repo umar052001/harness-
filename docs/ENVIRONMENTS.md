@@ -100,6 +100,10 @@ gateway with the same route table as the published origin, so acceptance tests
 exercise frontend/API routing together. Prefixes are preserved: `/api/items`
 reaches the API as `/api/items`. Longest matching route wins at path boundaries.
 
+Service names are unique lowercase identifiers, starting with a letter and using
+letters, digits or underscores (up to 32 characters). `database` is reserved.
+The root service may be named `app`; its `APP_URL` still points to the gateway.
+
 One project with up to four HTTP services runs at a time. There are at most eight
 build steps and eight check steps, each bounded to two minutes; the startup request
 is bounded to five minutes. Each readiness wait has a twenty-second limit. Service

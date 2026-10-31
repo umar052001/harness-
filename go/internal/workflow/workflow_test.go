@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/umar052001/ai-os/go/internal/runner"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,21 @@ func TestPlanValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestFallbackPlanUsesActualHostEscalationReason(t *testing.T) {
+	p := testPlan()
+	p.Stages[0].Model = "openai/gpt-6.1-sol"
+	raw, _ := json.Marshal(p)
+	parsed, err := parseFallbackPlan(raw, testRegistry(t), "Ollama cloud request returned HTTP 429")
+	if err != nil || !strings.Contains(parsed.Stages[0].Escalation, "HTTP 429") {
+		t.Fatalf("plan=%+v error=%v", parsed, err)
+	}
+	p.Stages[0].Model = "openai/gpt-5.5"
+	raw, _ = json.Marshal(p)
+	if _, err := parseFallbackPlan(raw, testRegistry(t), "HTTP 429"); err == nil {
+		t.Fatal("fallback enabled a disabled model")
+	}
+}
 func TestFallbackRespectsAccessAndDoesNotLoop(t *testing.T) {
 	r := testRegistry(t)
 	if got := r.Fallback(r.Router, nil, false); got != "" {
@@ -55,6 +71,23 @@ func TestFallbackRespectsAccessAndDoesNotLoop(t *testing.T) {
 	}
 	if got := r.Fallback(r.Router, []string{"openai/gpt-6.1-sol"}, true); got != "" {
 		t.Fatalf("repeated fallback %s", got)
+	}
+}
+
+func TestQuotaFailureSkippedInLaterStages(t *testing.T) {
+	b := Build{Dir: t.TempDir(), registry: testRegistry(t), opt: Options{AllowGPT: true}}
+	p := testPlan()
+	p.Stages = append(p.Stages, p.Stages[0])
+	var models []string
+	err := b.runStages(t.Context(), p, func(_ context.Context, s Stage, _ Plan, _ string, _ bool) error {
+		models = append(models, s.Model)
+		if s.Model == "ollama/gemma4:cloud" {
+			return errors.New("provider.quota: usage limit reached")
+		}
+		return nil
+	})
+	if err != nil || strings.Join(models, ",") != "ollama/gemma4:cloud,openai/gpt-6.1-sol,openai/gpt-6.1-sol" {
+		t.Fatalf("models=%v error=%v", models, err)
 	}
 }
 func TestAccountingPreservesUnknownAndCacheSemantics(t *testing.T) {
@@ -116,6 +149,28 @@ func TestSummaryDoesNotInventUsage(t *testing.T) {
 	}
 }
 
+func TestWorkflowEventsPersistUnknownAccounting(t *testing.T) {
+	var kinds []string
+	b := Build{Dir: t.TempDir(), opt: Options{Emit: func(e runner.Event) { kinds = append(kinds, e.Kind) }}}
+	a := Accounting{Measurement: "unknown", Billing: "subscription"}
+	if err := b.record(Record{Phase: "planning", Model: "openai/gpt-5.5", Accounting: &a, Result: "complete"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.summary(true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(kinds, ",") != "workflow.record,workflow.summary" {
+		t.Fatal(kinds)
+	}
+	raw, err := os.ReadFile(filepath.Join(b.Dir, "summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"unknownUsageCalls": 1`) {
+		t.Fatal(string(raw))
+	}
+}
+
 func TestDispatchRetriesProviderAndQualityFailures(t *testing.T) {
 	for _, failure := range []string{"provider request failed", "acceptance output did not meet requirements"} {
 		t.Run(failure, func(t *testing.T) {
@@ -144,7 +199,60 @@ func TestDispatchStopsAfterBoundedAttempts(t *testing.T) {
 	b := Build{Dir: t.TempDir(), registry: testRegistry(t), opt: Options{AllowGPT: true}}
 	calls := 0
 	err := b.runStages(t.Context(), testPlan(), func(context.Context, Stage, Plan, string, bool) error { calls++; return errors.New("fails") })
-	if err == nil || calls != 2 {
+	if err == nil || calls != 3 {
 		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
+func TestAutomaticPolicyUsesGemmaThenOnlySol(t *testing.T) {
+	b := Build{registry: testRegistry(t), opt: Options{AllowGPT: true}}
+	p := testPlan()
+	p.Stages = append(p.Stages, p.Stages[0], p.Stages[0])
+	for i := range p.Stages {
+		p.Stages[i].Model = "openai/gpt-6-astra"
+	}
+	p = b.routePlan(p)
+	for i, s := range p.Stages {
+		want := "openai/gpt-6.1-sol"
+		if i == 0 {
+			want = b.registry.Router
+		}
+		if s.Model != want {
+			t.Fatalf("stage %d: %s", i, s.Model)
+		}
+	}
+	if m, _ := b.registry.Model("openai/gpt-6-astra"); m.Enabled {
+		t.Fatal("Astra must stay disabled")
+	}
+}
+
+func TestSolRepairsAreBoundedAndQuotaIsNotRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		calls         int
+	}{
+		{"validation", "functional check failed", 2},
+		{"quota", "provider.quota", 1},
+		{"authentication", "Authentication required", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Build{Dir: t.TempDir(), registry: testRegistry(t), opt: Options{AllowGPT: true}}
+			p := testPlan()
+			p.Stages[0].Model = "openai/gpt-6.1-sol"
+			calls := 0
+			err := b.runStages(t.Context(), p, func(_ context.Context, s Stage, _ Plan, feedback string, _ bool) error {
+				calls++
+				if s.Model != "openai/gpt-6.1-sol" {
+					t.Fatal(s.Model)
+				}
+				if calls > 1 && feedback != tc.message {
+					t.Fatal("missing repair feedback")
+				}
+				return errors.New(tc.message)
+			})
+			if err == nil || calls != tc.calls {
+				t.Fatalf("calls=%d error=%v", calls, err)
+			}
+		})
 	}
 }

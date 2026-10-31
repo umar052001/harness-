@@ -24,7 +24,7 @@ func main() {
 	registry := flag.String("registry", "", "registry JSON (default config/models.json)")
 	check := flag.String("check", "", "acceptance command as a JSON argument array")
 	allowGPT := flag.Bool("allow-gpt", false, "permit existing ChatGPT OAuth escalation")
-	timeout := flag.Duration("timeout", 25*time.Minute, "whole-build deadline, at most 30m")
+	timeout := flag.Duration("timeout", 0, "optional whole-build deadline, 0 means no overall limit (maximum 30m)")
 	cloud := flag.String("cloud-worker", "", "internal sandboxed planning worker")
 	credential := flag.String("credential-worker", "", "internal sandboxed credential import")
 	flag.Parse()

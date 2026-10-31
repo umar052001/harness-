@@ -61,6 +61,8 @@ type Options struct {
 	// a default of one, which is the honest setting for a single-machine control
 	// plane: two agents competing for disk and CPU look like one flaky agent.
 	MaxConcurrentRuns int
+	// WorkflowRoot enables the host-owned routed OpenCode workflow.
+	WorkflowRoot string
 }
 
 // Server is an HTTP server for the ai-os control plane.
@@ -90,7 +92,8 @@ type Server struct {
 	publishIndex *publishIndex
 	// active is the live half of run state: what is running now, as opposed to
 	// what has finished and left a workspace behind.
-	active *runRegistry
+	active       *runRegistry
+	workflowRoot string
 }
 
 // New builds a server around a runner.
@@ -107,15 +110,16 @@ func New(run Runner, opt Options) *Server {
 	}
 	store, err := NewWorkspaceStore(root)
 	s := &Server{
-		run:        run,
-		sandboxBin: opt.SandboxBinary,
-		planner:    opt.Planner,
-		origins:    origins,
-		webDir:     opt.WebDir,
-		heartbeat:  15 * time.Second,
-		store:      store,
-		storeErr:   errText(err),
-		active:     newRunRegistry(opt.MaxConcurrentRuns),
+		run:          run,
+		workflowRoot: opt.WorkflowRoot,
+		sandboxBin:   opt.SandboxBinary,
+		planner:      opt.Planner,
+		origins:      origins,
+		webDir:       opt.WebDir,
+		heartbeat:    15 * time.Second,
+		store:        store,
+		storeErr:     errText(err),
+		active:       newRunRegistry(opt.MaxConcurrentRuns),
 	}
 	if store != nil {
 		s.publishIndex = newPublishIndex(store.Root())
@@ -145,15 +149,6 @@ func defaultWorkspacesDir() string {
 	}
 	return filepath.Join(os.TempDir(), "harness-workspaces")
 }
-
-// defaultRunTimeLimit is the wall-clock ceiling applied when a caller names none.
-//
-// Ten minutes, not the runner's twenty: a request that builds a page from a
-// fetched source finishes in a fraction of that, and the failure users actually
-// hit was a run that churned for twenty minutes and then died. A shorter,
-// visible ceiling turns "it sometimes responds and sometimes not" into a clear
-// end with a reason.
-const defaultRunTimeLimit = 10 * time.Minute
 
 func errText(err error) string {
 	if err == nil {
@@ -192,6 +187,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/workspace/{id}/database", s.handleDatabaseStart)
 	mux.HandleFunc("DELETE /api/workspace/{id}/database", s.handleDatabaseStop)
 	mux.HandleFunc("GET /api/workspace/{id}/app", s.handleApp)
+	mux.HandleFunc("GET /api/workflow", s.handleWorkflow)
 	mux.HandleFunc("POST /api/workspace/{id}/app", s.handleApp)
 	mux.HandleFunc("DELETE /api/workspace/{id}/app", s.handleApp)
 	mux.HandleFunc("GET /api/workspace/{id}", s.handleWorkspaceList)
@@ -226,6 +222,7 @@ func (s *Server) Handler() http.Handler {
 // ---------------------------------------------------------------------------
 
 type runRequest struct {
+	AllowGPT    bool     `json:"allowGPT,omitempty"`
 	ParentRunID string   `json:"parentRunId,omitempty"`
 	HarnessID   string   `json:"harnessId"`
 	Prompt      string   `json:"prompt"`
@@ -254,7 +251,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.TimeoutSec < 0 || req.TimeoutSec > 1800 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "time limit must be between 1 and 1800 seconds (0 uses 600)"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "time limit must be 0–1800 seconds (0 means no overall limit)"})
 		return
 	}
 	if len(req.Models) > 1 {
@@ -269,7 +266,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "workspace storage unavailable: " + s.storeErr})
 		return
 	}
-	if req.HarnessID == "opencode" && (len(req.Models) == 0 || strings.TrimSpace(req.Models[0]) == "") {
+	if req.HarnessID == "opencode" && s.workflowRoot != "" {
+		if err := s.validateWorkflowRequest(req); err != nil {
+			writeJSON(w, 400, map[string]any{"error": err.Error()})
+			return
+		}
+	} else if req.HarnessID == "opencode" && (len(req.Models) == 0 || strings.TrimSpace(req.Models[0]) == "") {
 		req.Models = []string{"opencode/big-pickle"}
 	}
 	if req.ParentRunID != "" {
@@ -318,6 +320,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runReq := runner.Request{
+		AllowGPT:    req.AllowGPT,
 		HarnessID:   req.HarnessID,
 		Prompt:      req.Prompt,
 		Models:      req.Models,
@@ -359,8 +362,6 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TimeoutSec > 0 {
 		runReq.Timeout = time.Duration(req.TimeoutSec) * time.Second
-	} else {
-		runReq.Timeout = defaultRunTimeLimit
 	}
 	// The registry entry stays without a run id until the workspace exists, then
 	// is completed here. A poller that arrives in between sees a live run with an
@@ -368,7 +369,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if runID != "" {
 		s.active.identify(token, runID, runReq.Workspace)
 	}
-	ctx, cancel := context.WithTimeout(s.jobContext, runReq.Timeout)
+	ctx, cancel := context.WithCancel(s.jobContext)
+	if runReq.Timeout > 0 {
+		cancel()
+		ctx, cancel = context.WithTimeout(s.jobContext, runReq.Timeout)
+	}
 	defer func() {
 		if !dispatched {
 			cancel()
@@ -386,6 +391,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Models) > 0 {
 		meta.Model = req.Models[0]
+	} else if s.workflowRoot != "" && req.HarnessID == "opencode" {
+		meta.Model = "Automatic · Gemma-first"
 	}
 	serviceCtx, serviceCancel := context.WithTimeout(ctx, 10*time.Second)
 	runReq.DatabaseURL, err = s.environments.Connection(serviceCtx, meta.ProjectID)
@@ -397,7 +404,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if runReq.DatabaseURL != "" {
 		runReq.Prompt = "A project PostgreSQL database is available through DATABASE_URL in your environment. Read that variable in code; never print or hardcode the connection string. Preserve existing data and use migrations for schema changes.\n\n" + runReq.Prompt
 	}
-	runReq.Prompt = environment.AppInstructions + runReq.Prompt
+	if s.workflowRoot == "" || req.HarnessID != "opencode" {
+		runReq.Prompt = environment.AppInstructions + runReq.Prompt
+	}
 	if err := s.store.saveMetadata(runID, meta); err != nil {
 		http.Error(w, "could not save run: "+err.Error(), http.StatusInternalServerError)
 		return

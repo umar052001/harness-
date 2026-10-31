@@ -16,6 +16,9 @@ import type { Harness } from './types'
  * the panel should arrive from the side the eye came from.
  */
 interface SettingsProps {
+	workflowModels:{id:string;provider:string}[]
+	allowGPT:boolean
+	onAllowGPT:(value:boolean)=>void
   open: boolean
   onClose: () => void
   harnesses: Harness[]
@@ -165,15 +168,21 @@ export default function SettingsDrawer(props: SettingsProps) {
                 <h3 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                   model
                 </h3>
-                <input
+                <select
                   value={props.model}
-                  onInput={(e) => props.onModel(e.currentTarget.value)}
-                  placeholder="e.g. opencode/big-pickle"
+                  onChange={(e) => props.onModel(e.currentTarget.value)}
                   aria-label="Model"
                   class="mono w-full rounded-lg border border-hairline bg-surface-2 px-3 py-2 text-xs text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/60"
-                />
+                >
+                  <option value="">Automatic · Gemma-first</option>
+                  <For each={props.workflowModels}>{m=><option value={m.id} disabled={m.provider==='openai' && !props.allowGPT}>{m.id}</option>}</For>
+                </select>
+                <label class="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+                  <input type="checkbox" checked={props.allowGPT} onChange={e=>{props.onAllowGPT(e.currentTarget.checked);if(!e.currentTarget.checked && props.model.startsWith('openai/'))props.onModel('')}} />
+                  Allow existing ChatGPT subscription for justified routing / fallback
+                </label>
                 <p class="mt-1.5 text-[10px] leading-relaxed text-zinc-700">
-                  OpenCode uses Big Pickle (opencode/big-pickle) unless you select another model.
+                  Gemma plans and makes the initial implementation. Only GPT-6.1 Sol handles follow-up work and repairs, with at most two Sol attempts per stage. Astra is disabled. Ponytail and Graphify are mandatory. All providers have limits; subscription cost and remaining quota are unknown.
                 </p>
               </section>
 
@@ -203,7 +212,7 @@ export default function SettingsDrawer(props: SettingsProps) {
                   time limit
                 </h3>
                 <div class="flex gap-1">
-                  <For each={[300, 600, 1200, 1800]}>
+                  <For each={[0, 300, 600, 1200, 1800]}>
                     {(sec) => (
                       <button
                         type="button"
@@ -215,14 +224,14 @@ export default function SettingsDrawer(props: SettingsProps) {
                             : 'border-hairline text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
                         }`}
                       >
-                        {sec / 60}m
+                        {sec === 0 ? 'No limit' : `${sec / 60}m`}
                       </button>
                     )}
                   </For>
                 </div>
                 <p class="mt-1.5 text-[10px] leading-relaxed text-zinc-700">
-                  How long a run may take before it is stopped. A short, visible
-                  ceiling beats a long silent wait that ends with no output.
+                  No overall limit by default. Stop cancels the job; repeated failures
+                  are bounded. Quiet model generation alone is not considered a loop.
                 </p>
               </section>
             </div>

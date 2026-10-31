@@ -27,6 +27,12 @@ export async function fetchHarnesses(): Promise<Harness[]> {
   return body.harnesses
 }
 
+export async function fetchWorkflow(): Promise<{models:{id:string;provider:string}[]}> {
+  const res=await request('/api/workflow')
+  if(!res.ok)throw new Error(`Routed build configuration ${res.status}`)
+  return res.json()
+}
+
 /** fetchListing describes what a run left behind. */
 export async function fetchListing(runId: string): Promise<Listing> {
   const res = await request(`/api/workspace/${encodeURIComponent(runId)}`)

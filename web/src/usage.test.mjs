@@ -1,6 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { latestUsage, formatCost } from './usage.ts'
+import { latestUsage, formatCost, formatWorkflowCost } from './usage.ts'
+
+test('combined workflow cost never treats missing subscription prices as free',()=>{
+  assert.equal(formatWorkflowCost({knownCostEstimateUSDRange:null,unknownCostCalls:1}),'Cost unknown / subscription')
+  assert.match(formatWorkflowCost({knownCostEstimateUSDRange:[0.01,0.02],unknownCostCalls:1}),/partial; unknown costs excluded/)
+  assert.equal(formatWorkflowCost({knownCostEstimateUSDRange:[0,0],unknownCostCalls:0}),'$0.000000–$0.000000 known-rate equivalent')
+})
 
 test('missing usage is unknown, an explicit zero estimate is preserved', () => {
   assert.equal(formatCost(), 'Cost unknown')
