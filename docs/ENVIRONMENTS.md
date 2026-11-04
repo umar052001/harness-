@@ -1,6 +1,6 @@
 # Project databases
 
-ai-os manages PostgreSQL through rootless Podman. The host chooses the image,
+harness++ manages PostgreSQL through rootless Podman. The host chooses the image,
 resource limits, loopback port, and volume; agents receive a database connection,
 not a container-engine socket or arbitrary container-management access.
 
@@ -13,7 +13,7 @@ unprivileged user namespaces and subordinate UID/GID ranges. Verify:
 podman info --format '{{.Host.Security.Rootless}}'
 ```
 
-This must print `true`. ai-os refuses to start a database through a rootful runtime.
+This must print `true`. harness++ refuses to start a database through a rootful runtime.
 Podman is used locally with remote mode disabled. Existing Docker installations are
 independent of this runtime.
 
@@ -33,7 +33,7 @@ runner resolves its selected tool paths once and removes configuration-dependent
 shims from the sandbox PATH. System clients such as `/usr/bin/psql` remain usable
 without granting access to the operator's mise configuration.
 
-Database services outlive individual coding jobs and ai-os server restarts.
+Database services outlive individual coding jobs and harness++ server restarts.
 **Stop database** stops the container but retains its named volume. Service changes
 are blocked while jobs are active, preventing a database stop during a migration.
 Stopping a database does not restore an earlier data version: file checkpoints
@@ -93,7 +93,8 @@ Failure diagnostics retain a bounded output tail and redact the managed database
 connection/password. Runtime status resets after control-plane restart.
 
 Commands are argument arrays, executed without an implicit shell, using installed
-system toolchains (`/usr/bin:/bin`) or project-local executables. `cwd` must be an
+system or managed toolchains, using the same resolved PATH and toolchain read grants
+as coding jobs, or project-local executables. `cwd` must be an
 existing workspace-relative directory. Services receive `HOST=127.0.0.1`, distinct
 `PORT` values, and `NAME_URL` for direct service access. `APP_URL` points to a local
 gateway with the same route table as the published origin, so acceptance tests
@@ -107,8 +108,8 @@ The root service may be named `app`; its `APP_URL` still points to the gateway.
 One project with up to four HTTP services runs at a time. There are at most eight
 build steps and eight check steps, each bounded to two minutes; the startup request
 is bounded to five minutes. Each readiness wait has a twenty-second limit. Service
-lifetime is bounded to twenty-four hours and control-plane shutdown. **Stop app**
-joins cleanup; after restarting ai-os choose **Build & start app** again. Saved data
+lifetime ends on **Stop app**, a required service exit, or control-plane shutdown.
+Stop joins cleanup; after restarting harness++ choose **Build & start app** again. Saved data
 survives, so migrations and tests must be idempotent and preserve user records.
 
 Legacy `{"entry":"relative/server.js"}` manifests remain supported as one Node
@@ -128,6 +129,13 @@ does not invent a connection. SQLite-backed applications keep their
 database files in their workspace. Stop an application before continuing its project
 so file checkpoints cannot copy a live database mid-write. PostgreSQL data remains
 shared across attempts, while SQLite files are copied with the attempt.
+
+Declare `"ai":"ollama"` for backend text generation. The host supplies
+`OLLAMA_BASE_URL` and `OLLAMA_MODEL`; see [AI applications](AI-APPS.md).
+Both the local preview proxy and verification gateway allow up to two minutes
+for response headers, so text generation is not cut off after ten seconds.
+Client cancellation still cancels upstream requests. Stream longer jobs or return
+a job ID and let the browser poll; no request should wait indefinitely.
 
 ## Verification
 

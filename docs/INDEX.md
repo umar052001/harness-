@@ -8,5 +8,6 @@
 - [Environments](ENVIRONMENTS.md): rootless project database setup and lifecycle.
 - [Frontend](../web/README.md): frontend development commands.
 - [Executor](../rust/sandboxd/README.md): sandboxd commands and policy.
-- [Pitch deck](../pitch.html): a short, single-file presentation with presenter notes and local demo links.
+- [Product audit](PRODUCT-AUDIT.md): findings, fixes, and remaining release gaps.
+- [AI applications](AI-APPS.md): runtime text generation and image-provider requirements.
 - [Graphify image](assets/harness-current-session.png): AST-only project graph snapshot from 2026-10-31.

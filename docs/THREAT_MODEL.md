@@ -130,9 +130,17 @@ constrains how much CPU or memory that group may consume before it is killed, an
 nothing stops a group from forking faster than it is reaped. A caller that needs
 real limits must impose them, ideally with a cgroup.
 
-**The scratch directory is not encrypted.** It is `0700` and inside the
-workspace, which protects it from other users and from other runs, but the data
+**The scratch directory is not encrypted.** It is a short private `0700` directory
+under the system temporary directory, granted only to its run. The data
 in it is the parent's to read.
+
+**The control plane is local, not authenticated.** The executable accepts only
+loopback bind addresses and rejects foreign Host headers to prevent DNS rebinding.
+Browser origin checks reject cross-origin mutations. Neither control prevents a
+local process, including generated code with a network grant, from calling the
+API. Do not expose this server publicly or use it for mutually untrusted users.
+Network isolation or an authenticated broker is required before that trust model
+can change. A network-enabled sandbox can also consume the signed-in Ollama quota.
 
 **Seccomp and copy-on-write are not implemented.** The `Cargo.toml` description
 mentions them; the code does not have them. They are the next step, not a
