@@ -2,23 +2,10 @@ import { For, onCleanup, onMount, Show } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import type { Harness } from './types'
 
-/**
- * Settings, as a drawer from the left.
- *
- * The choice of a drawer over a popover or a modal is the whole design
- * decision here. Settings is a surface people return to - switch agent, fix a
- * model, turn off auto-approve - so it earns a stable, scrollable, roomy place
- * rather than a card that vanishes. A modal would block the artifact you are
- * about to ask for changes to; a popover anchored to a 36px gear would be a
- * column too narrow to read a command line in.
- *
- * Left rather than right because the gear sits at the left end of the chat bar:
- * the panel should arrive from the side the eye came from.
- */
 interface SettingsProps {
-	workflowModels:{id:string;provider:string}[]
-	allowGPT:boolean
-	onAllowGPT:(value:boolean)=>void
+  workflowModels: { id: string; provider: string }[]
+  allowGPT: boolean
+  onAllowGPT: (value: boolean) => void
   open: boolean
   onClose: () => void
   harnesses: Harness[]
@@ -47,9 +34,11 @@ function installedCount(hs: Harness[]): number {
 }
 
 export default function SettingsDrawer(props: SettingsProps) {
+  let dialog: HTMLDialogElement | undefined
+  const close = () => { dialog?.close(); props.onClose() }
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') props.onClose()
+      if (e.key === 'Escape') close()
     }
     window.addEventListener('keydown', onKey)
     onCleanup(() => window.removeEventListener('keydown', onKey))
@@ -58,19 +47,17 @@ export default function SettingsDrawer(props: SettingsProps) {
   return (
     <Show when={props.open}>
       <Portal>
-        <dialog ref={el => queueMicrotask(() => el.isConnected && el.showModal())}
-          onCancel={e => { e.preventDefault(); props.onClose() }}
+        <dialog ref={el => { dialog = el; queueMicrotask(() => el.isConnected && el.showModal()) }}
+          aria-label="Settings"
+          onCancel={e => { e.preventDefault(); close() }}
           class="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 text-inherit">
           <button
             type="button"
             aria-label="Close settings"
-            onClick={props.onClose}
+            onClick={close}
             class="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
           />
           <aside
-            role="dialog"
-            aria-modal="true"
-            aria-label="Settings"
             /* Full width on a phone, where a 360px panel would leave a sliver of
                the stage behind it looking like a mistake. */
             class="absolute inset-y-0 left-0 flex w-full animate-[slideIn_.18s_ease-out] flex-col overflow-y-auto border-r border-hairline bg-surface-1 sm:w-[360px]"
@@ -82,7 +69,7 @@ export default function SettingsDrawer(props: SettingsProps) {
               <span class="flex-1" />
               <button
                 type="button"
-                onClick={props.onClose}
+                onClick={close}
                 aria-label="Close settings"
                 class="rounded px-2 py-1 text-[11px] text-zinc-500 transition hover:bg-surface-2 hover:text-zinc-200"
               >
@@ -103,13 +90,13 @@ export default function SettingsDrawer(props: SettingsProps) {
                 </h3>
                 <button
                   type="button"
-                  onClick={props.onDemoPrompt}
+                  onClick={() => { dialog?.close(); props.onDemoPrompt() }}
                   class="w-full rounded-lg border border-hairline px-3 py-2 text-left text-[12px] text-zinc-300 transition hover:border-emerald-500/50 hover:bg-emerald-500/5 hover:text-emerald-200"
                 >
                   Fill in the portfolio prompt
                   <span class="mt-0.5 block text-[10px] text-zinc-600">
                     Writes a one-page static portfolio from a profile spec carried
-                    in the prompt. Sized to finish well inside the time limit.
+                    in the prompt.
                   </span>
                 </button>
               </section>
@@ -179,10 +166,10 @@ export default function SettingsDrawer(props: SettingsProps) {
                 </select>
                 <label class="mt-3 flex items-center gap-2 text-xs text-zinc-400">
                   <input type="checkbox" checked={props.allowGPT} onChange={e=>{props.onAllowGPT(e.currentTarget.checked);if(!e.currentTarget.checked && props.model.startsWith('openai/'))props.onModel('')}} />
-                  Allow existing ChatGPT subscription for justified routing / fallback
+                  Allow ChatGPT subscription for follow-up work and repairs
                 </label>
                 <p class="mt-1.5 text-[10px] leading-relaxed text-zinc-700">
-                  Gemma plans and makes the initial implementation. Only GPT-6.1 Sol handles follow-up work and repairs, with at most two Sol attempts per stage. Astra is disabled. Ponytail and Graphify are mandatory. All providers have limits; subscription cost and remaining quota are unknown.
+                  Gemma plans and builds the first version. When enabled, GPT-6.1 Sol handles follow-up work and repairs, with up to two attempts per stage. Remaining provider quota and subscription cost are unknown.
                 </p>
               </section>
 
@@ -238,7 +225,7 @@ export default function SettingsDrawer(props: SettingsProps) {
 
             <div class="shrink-0 border-t border-hairline px-4 py-3 text-[10px] leading-relaxed text-zinc-700">
               Every run executes under Landlock confinement in its own workspace.
-              Nothing is approved by default unless you turn it on above.
+              Tool access is controlled above. Cloud models may receive project code.
             </div>
           </aside>
         </dialog>

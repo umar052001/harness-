@@ -1,33 +1,11 @@
 @import 'tailwindcss';
 
-/*
- * Muted text, remapped so it is actually readable.
- *
- * The dashboard uses zinc-500/600/700 for everything secondary: timestamps,
- * counters, hints, tab labels, the narrator badge. On these backgrounds the
- * stock values measure 4.0, 2.5 and 1.9 against white - the 10px timestamps and
- * the keyboard hints were effectively invisible, and every one of them failed
- * WCAG AA. The hierarchy is kept, only the values move: these measure 5.8, 6.7
- * and 7.6, so the dimmest tier is still clearly dimmer than body text.
- *
- * Remapping the token fixes all 34 call sites at once and keeps the palette in
- * one place, rather than leaving a scattered set of text colours to drift.
- */
+/* Keep secondary text readable on the shared dark surfaces. */
 @theme {
   --color-zinc-500: oklch(0.72 0.012 286);
   --color-zinc-600: oklch(0.68 0.013 286);
   --color-zinc-700: oklch(0.64 0.014 286);
 
-  /*
-   * Surfaces, named rather than sprinkled.
-   *
-   * The app previously used a different near-black literal for the shell, the
-   * panels and the drawers - #08090c, #0b0d11, #0a0c10, #07090c - which read as
-   * four subtly mismatched greys and made "which layer am I on" unanswerable.
-   * These three are the whole depth model: the shell, a panel resting on it, and
-   * an elevated control or input. The hairline is the single border colour, so
-   * every seam in the product is the same weight.
-   */
   --color-surface-0: #111310;
   --color-surface-1: #191c17;
   --color-surface-2: #232720;

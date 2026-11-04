@@ -39,7 +39,7 @@ func appFixture(t *testing.T, m AppManifest, files map[string]string) (string, s
 }
 
 func TestLiveMultiServiceVerification(t *testing.T) {
-	m := AppManifest{Version: 1, Build: []AppStep{{Command: []string{"python3", "-c", "open('built','w').write('ok')"}}}, Services: []AppService{
+	m := AppManifest{Version: 1, AI: "ollama", Build: []AppStep{{Command: []string{"python3", "-c", "open('built','w').write('ok')"}}}, Services: []AppService{
 		{Name: "api", Route: "/api", HealthPath: "/health", AppStep: AppStep{Command: []string{"python3", "api.py"}}},
 		{Name: "web", Route: "/", AppStep: AppStep{Command: []string{"node", "web.js"}}},
 	}, Checks: []AppStep{{Command: []string{"python3", "check.py"}}}}
@@ -59,6 +59,8 @@ http.server.HTTPServer((os.environ['HOST'],int(os.environ['PORT'])),Handler).ser
 		"web.js": `const http=require('http');http.createServer((req,res)=>res.end('web')).listen(process.env.PORT,process.env.HOST);`,
 		"check.py": `import urllib.request,os,json
 assert open('built').read()=='ok'
+assert os.environ['OLLAMA_BASE_URL']=='http://127.0.0.1:11434'
+assert os.environ['OLLAMA_MODEL']=='gemma4:cloud'
 base=os.environ['APP_URL']
 assert urllib.request.urlopen(base).read()==b'web'
 if os.path.exists('checked'):
@@ -219,5 +221,31 @@ func TestLiveRuntimeDNS(t *testing.T) {
 	err := runAppStep(ctx, t.Context(), bin, t.TempDir(), []string{"PATH=/usr/bin:/bin"}, AppStep{Command: []string{"node", "-e", `require('dns').lookup('registry.npmjs.org',(e,a)=>{if(e)throw e;if(!a)process.exit(1)})`}})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLiveManagedToolchainInAppBuild(t *testing.T) {
+	home := t.TempDir()
+	tools := filepath.Join(home, ".local", "share", "mise", "installs", "fixture", "bin")
+	if err := os.MkdirAll(tools, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tools, "harness-test-tool"), []byte("#!/bin/sh\nprintf managed > built\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", tools+":/usr/bin:/bin")
+	m := AppManifest{Version: 1, Build: []AppStep{{Command: []string{"harness-test-tool"}}}, Services: []AppService{{Name: "web", Route: "/", AppStep: AppStep{Command: []string{"node", "server.js"}}}}}
+	dir, bin := appFixture(t, m, map[string]string{"server.js": `require('http').createServer((q,s)=>s.end('ok')).listen(process.env.PORT,process.env.HOST)`})
+	var apps Apps
+	defer apps.Stop("")
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if _, err := apps.Start(ctx, t.Context(), bin, "managed-tools", dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "built"))
+	if err != nil || string(data) != "managed" {
+		t.Fatalf("managed build output=%q err=%v", data, err)
 	}
 }

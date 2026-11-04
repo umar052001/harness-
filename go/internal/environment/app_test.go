@@ -12,6 +12,8 @@ func TestAppEntryValidatesLaunchManifest(t *testing.T) {
 		valid          bool
 	}{
 		{"node", `{"entry":"server.js"}`, true},
+		{"text AI", `{"entry":"server.js","ai":"ollama"}`, true},
+		{"unsupported AI", `{"entry":"server.js","ai":"image"}`, false},
 		{"traversal", `{"entry":"../server.js"}`, false},
 		{"absolute", `{"entry":"/tmp/server.js"}`, false},
 		{"shell", `{"entry":"server.sh"}`, false},

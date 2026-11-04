@@ -25,8 +25,8 @@ func TestLivePostgresClientWithoutHostConfig(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	stream, err := (&sbx.Client{Binary: bin}).Stream(ctx, &sbx.StreamRequest{
 		Workspace: t.TempDir(), Stdio: sbx.StdioPipe, TimeoutMs: 10000,
-		Argv: []string{"psql", "--version"}, Env: []string{"PATH=" + RuntimePath()},
-		ReadPaths: RuntimeReadPaths(), Stdout: &stdout, Stderr: &stderr,
+		Argv: []string{"psql", "--version"}, Env: []string{"PATH=" + sbx.RuntimePath()},
+		ReadPaths: sbx.RuntimeReadPaths(), Stdout: &stdout, Stderr: &stderr,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -61,8 +61,8 @@ func TestLiveChromiumInLongWorkspace(t *testing.T) {
 	stream, err := (&sbx.Client{Binary: bin}).Stream(ctx, &sbx.StreamRequest{
 		Workspace: ws, Stdio: sbx.StdioPipe, TimeoutMs: 15000,
 		Argv:      []string{chromium, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run", "--user-data-dir=" + filepath.Join(ws, "profile"), "--dump-dom", "data:text/html,<h1>HARNESS_BROWSER_OK</h1>"},
-		Env:       []string{"PATH=" + RuntimePath(), "HOME=" + ws, "XDG_CONFIG_HOME=" + ws},
-		ReadPaths: append(RuntimeReadPaths(), "/proc"), Stdout: &stdout, Stderr: &stderr,
+		Env:       []string{"PATH=" + sbx.RuntimePath(), "HOME=" + ws, "XDG_CONFIG_HOME=" + ws},
+		ReadPaths: append(sbx.RuntimeReadPaths(), "/proc"), Stdout: &stdout, Stderr: &stderr,
 	})
 	if err != nil {
 		t.Fatal(err)

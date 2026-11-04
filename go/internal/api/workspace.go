@@ -330,6 +330,15 @@ func (s *WorkspaceStore) resolve(id, rel string) (string, error) {
 	if resolved != dir && !strings.HasPrefix(resolved, dir+string(filepath.Separator)) {
 		return "", errors.New("workspace: path escapes the run directory")
 	}
+	resolvedRel, err := filepath.Rel(dir, resolved)
+	if err != nil {
+		return "", err
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(resolvedRel), "/") {
+		if agentStateDirs[segment] {
+			return "", errors.New("workspace: agent state is not a project artifact")
+		}
+	}
 	return resolved, nil
 }
 

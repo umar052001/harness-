@@ -103,7 +103,7 @@ func New(opt Options) (*Build, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Build{opt: opt, registry: r, Dir: dir, workspace: filepath.Join(dir, "project"), binary: binary, sandbox: filepath.Join(root, "rust/sandboxd/target/release/sandboxd"), path: runner.RuntimePath()}
+	b := &Build{opt: opt, registry: r, Dir: dir, workspace: filepath.Join(dir, "project"), binary: binary, sandbox: filepath.Join(root, "rust/sandboxd/target/release/sandboxd"), path: sbx.RuntimePath()}
 	if opt.Workspace != "" {
 		b.workspace = opt.Workspace
 	}
@@ -162,7 +162,7 @@ func (b *Build) discoverTools() error {
 	b.tooling = &runner.Tooling{GraphifyMCP: mcp, Ponytail: filepath.Join(b.opt.Root, "integrations/ponytail"), AuditPlugin: filepath.Join(b.opt.Root, "integrations/audit"), ReadPaths: []string{
 		filepath.Dir(b.graphify), filepath.Dir(filepath.Dir(interpreter)), filepath.Dir(filepath.Dir(real)), ponytail, filepath.Join(b.opt.Root, "integrations"), b.binary, "/proc",
 	}}
-	b.tooling.ReadPaths = append(b.tooling.ReadPaths, runner.RuntimeReadPaths()...)
+	b.tooling.ReadPaths = append(b.tooling.ReadPaths, sbx.RuntimeReadPaths()...)
 	return nil
 }
 

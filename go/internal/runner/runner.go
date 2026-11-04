@@ -93,7 +93,7 @@ type Runner struct {
 
 // New builds a runner.
 func New(reg *harness.Registry, sandboxBinary string) *Runner {
-	return &Runner{registry: reg, sandbox: &sbx.Client{Binary: sandboxBinary}, sandboxed: true, path: RuntimePath()}
+	return &Runner{registry: reg, sandbox: &sbx.Client{Binary: sandboxBinary}, sandboxed: true, path: sbx.RuntimePath()}
 }
 
 // NewUnsandboxed builds a runner that does not confine the agent.
@@ -307,7 +307,7 @@ func (r *Runner) connect(ctx context.Context, h *harness.Harness, req Request, w
 		// resolves its *own* /proc/<pid> does not match it and the runtime dies
 		// anyway. The grant is read-only; the agent can observe no more than it
 		// could unconfined, and exposes nothing outside its own namespace.
-		ReadPaths: append(append(append(RuntimeReadPaths(), "/proc"), sbx.ResolverReadPaths()...), toolingPaths(req.Tooling)...),
+		ReadPaths: append(append(append(sbx.RuntimeReadPaths(), "/proc"), sbx.ResolverReadPaths()...), toolingPaths(req.Tooling)...),
 		// Pipe transport, not a pty. ACP is a JSON-RPC dialect over stdio, and a
 		// pty would echo every frame back at the peer, rewrite newlines, and
 		// line-buffer a protocol that has no lines to buffer on.
@@ -455,7 +455,7 @@ func (r *Runner) runCLI(ctx context.Context, h *harness.Harness, req Request, ws
 			Env: r.childEnv(h, req), Stdio: sbx.StdioPipe,
 			Stdin: stdin, Stdout: output, Stderr: &lineEmitter{emit: em.outputLine("stderr")},
 			AllowNet: h.NeedsNetwork != "", NetWhy: netWhy(h),
-			ReadPaths: append(append(RuntimeReadPaths(), "/proc"), sbx.ResolverReadPaths()...),
+			ReadPaths: append(append(sbx.RuntimeReadPaths(), "/proc"), sbx.ResolverReadPaths()...),
 			TimeoutMs: int(req.Timeout.Milliseconds()),
 		})
 		if err != nil {
@@ -577,36 +577,6 @@ func reqWorkspace(req Request) string {
 		return req.Workspace
 	}
 	return os.TempDir()
-}
-
-// RuntimeReadPaths lists where managed toolchains live, so a harness that is a
-// mise-managed or nvm-installed binary is reachable under the sandbox.
-//
-// Only paths that exist are returned. The executor validates every grant before
-// it builds a ruleset and refuses to start when one is missing, which is the
-// behaviour we want: a grant that does not exist is either a typo or a stale
-// assumption, and silently dropping it would make the sandbox appear to work
-// while the agent failed for an unrelated-looking reason. Filtering happens here
-// instead, because "this install method is not in use" is not a policy error.
-func RuntimeReadPaths() []string {
-	// Chromium's libpci initialization exits if it cannot list this directory,
-	// even with --disable-gpu. Device symlink targets remain inaccessible.
-	candidates := []string{"/sys/bus/pci/devices"}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates,
-			filepath.Join(home, ".local", "share", "mise", "installs"),
-			filepath.Join(home, ".nvm"),
-			filepath.Join(home, ".volta"),
-			filepath.Join(home, ".bun"),
-		)
-	}
-	var dirs []string
-	for _, d := range candidates {
-		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
-			dirs = append(dirs, d)
-		}
-	}
-	return dirs
 }
 
 // decodeChunk turns a base64 output payload into text for display.

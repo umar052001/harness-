@@ -33,6 +33,7 @@ type AppManifest struct {
 	Version  int          `json:"version,omitempty"`
 	Entry    string       `json:"entry,omitempty"` // Compatibility with the first Node-only contract.
 	Database string       `json:"database,omitempty"`
+	AI       string       `json:"ai,omitempty"`
 	Build    []AppStep    `json:"build,omitempty"`
 	Services []AppService `json:"services,omitempty"`
 	Checks   []AppStep    `json:"checks,omitempty"`
@@ -87,6 +88,9 @@ func LoadApp(workspace string) (AppManifest, error) {
 	}
 	if m.Database != "" && m.Database != "postgres" {
 		return m, errors.New("supported managed database: postgres")
+	}
+	if m.AI != "" && m.AI != "ollama" {
+		return m, errors.New("supported AI runtime: ollama (text generation)")
 	}
 	if len(m.Services) == 0 || len(m.Services) > 4 || len(m.Build) > 8 || len(m.Checks) > 8 {
 		return m, errors.New("app requires 1–4 services and at most 8 build/check steps")

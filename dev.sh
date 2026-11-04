@@ -3,7 +3,7 @@
 # Build everything and start the control plane. One command, from a clean clone.
 #
 #   ./dev.sh            listen on 127.0.0.1:8091
-#   ./dev.sh --addr :9000
+#   ./dev.sh --addr 127.0.0.1:9000
 #
 # The three builds are ordered by cost: cargo is incremental, the frontend is a
 # second or two, and Go is last so a frontend failure stops before the server
@@ -31,7 +31,7 @@ cargo build --release --manifest-path rust/sandboxd/Cargo.toml
 
 echo "==> building frontend (vite)"
 if [[ ! -d web/node_modules ]]; then
-  (cd web && npm install)
+  (cd web && npm ci)
 fi
 (cd web && npm run build)
 

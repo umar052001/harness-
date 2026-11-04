@@ -28,7 +28,10 @@ run: server
 
 test:
 	cd go && go test ./...
+	cd go && go vet ./...
 	cd web && npm test
+	cd web && npm run build
+	node --test integrations/audit/audit.test.mjs
 	cargo test --release --manifest-path rust/sandboxd/Cargo.toml
 	cargo clippy --release --all-targets --manifest-path rust/sandboxd/Cargo.toml -- -D warnings
 

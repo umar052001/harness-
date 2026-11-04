@@ -20,8 +20,8 @@ export default function App() {
   const [selected, setSelected] = createSignal('opencode')
   const [model, setModel] = createSignal('')
   const [autoApprove, setAutoApprove] = createSignal(true)
-  const [allowGPT, setAllowGPT] = createSignal(true)
-  const [workflowModels,setWorkflowModels]=createSignal<{id:string;provider:string}[]>([])
+  const [allowGPT, setAllowGPT] = createSignal(false)
+  const [workflowModels, setWorkflowModels] = createSignal<{ id: string; provider: string }[]>([])
   const [prompt, setPrompt] = createSignal('')
   const [events, setEvents] = createSignal<RunEvent[]>([])
   const [running, setRunning] = createSignal(false)
@@ -166,12 +166,12 @@ export default function App() {
     }
   }
 
-  async function stop() {
+  async function stop(targetId?: string) {
     if (stopping()) return
     setStopping(true)
     try {
       if (!runId() && !active().length) await poll()
-      const id = runId() || active()[0]?.runId
+      const id = targetId || runId() || active()[0]?.runId
       if (id) await stopRun(id)
       else setFatal('The run has not been assigned yet. Try Stop run again in a moment.')
       await poll()
@@ -208,7 +208,7 @@ export default function App() {
         <Show when={fatal()}><div class="notice" role="alert"><span>{fatal()}</span><button onClick={() => void connect()}>Reconnect</button><button aria-label="Dismiss error" onClick={() => setFatal('')}>×</button></div></Show>
         <Show when={parentRunId() && !running()}><div class="active-notice"><span>Describe the next change. Saved project files will be copied into a new attempt; the previous version stays intact.</span><button onClick={() => setParentRunId(undefined)}>Cancel continuation</button></div></Show>
         <Show when={!loading() && !ready()}><div class="notice">{!health() ? 'Start the control plane, then reconnect.' : !health()?.artifactsOk ? 'Workspace storage is unavailable.' : !health()?.sandboxdOk ? 'The sandbox executor is unavailable.' : 'Install a supported agent to begin.'}<button onClick={() => setSettingsOpen(true)}>Open settings</button></div></Show>
-        <Show when={active().length > 0 && !running()}><div class="active-notice"><span><i class="live-dot" /> A run is active on this machine. One run at a time.</span><button onClick={() => void selectRun(active()[0].runId)}>View run</button><button disabled={stopping()} onClick={() => void stop()}>Stop run</button></div></Show>
+        <Show when={active().length > 0 && !running()}><div class="active-notice"><span><i class="live-dot" /> A run is active on this machine. One run at a time.</span><button onClick={() => void selectRun(active()[0].runId)}>View run</button><button disabled={stopping()} onClick={() => void stop(active()[0].runId)}>Stop run</button></div></Show>
 
         <section class="workspace-stage">
           <Show when={runId() || running()} fallback={
@@ -220,7 +220,7 @@ export default function App() {
                 <p>Describe what you want to build. An agent works in its own sandbox.<br class="desktop-break" /> Watch it take shape, then preview and keep every file.</p>
                 <div class="workflow" aria-label="How harness++ works"><span><b>01</b> Describe</span><i>→</i><span><b>02</b> Build safely</span><i>→</i><span><b>03</b> Make it yours</span></div>
               </div>
-              <div class="welcome-footer"><span>Gemma-first · Subscription GPT fallback · Ponytail</span><span>Saved locally · Export anytime</span></div>
+               <div class="welcome-footer"><span>Plan · Build · Check · Improve</span><span>Saved locally · Export anytime</span></div>
             </div>
           }>
             <div class="stage-tabs" role="group" aria-label="Workspace view">

@@ -1,10 +1,4 @@
-// Package api is the control plane's HTTP surface.
-//
-// It is deliberately thin: the runner already produces the stream of typed
-// events a frontend needs, so the API's only real job is framing that stream as
-// server-sent events and exposing the harness catalogue. Everything a client
-// can do fits in three routes: ask what is healthy, ask what agents exist, and
-// start a run whose whole life is delivered as one SSE stream.
+// Package api serves build jobs, saved projects, previews, and app services.
 package api
 
 import (
@@ -165,10 +159,11 @@ func elide(s string, max int) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) <= max {
+	runes := []rune(s)
+	if len(runes) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	return string(runes[:max]) + "…"
 }
 
 // Handler returns the full HTTP handler: API routes, CORS, and the frontend
@@ -495,18 +490,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // sseSink serialises writes to one event stream.
-//
-// Three things make a raw ResponseWriter the wrong thing to hand to a producer
-// goroutine. The bytes of one frame have to land together, or a heartbeat
-// splits an event in half. Writes from the heartbeat and the run's event
-// callback are genuinely concurrent, and http.ResponseWriter is not safe for
-// concurrent use. And a producer can outlive the handler: the agent's pipes are
-// copied by goroutines nobody joins, so an event can arrive after this function
-// has returned and net/http has recycled the writer - writing to it then panics
-// and takes the whole control plane down, which is what happened once already.
-//
-// So: one mutex per stream, one write per frame, a closed flag that turns a late
-// event into a no-op, and a recover as the last line of defence.
+// Jobs outlive browser connections, so close must prevent late handler writes.
 type sseSink struct {
 	mu      sync.Mutex
 	w       http.ResponseWriter
@@ -921,7 +905,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 				w.WriteHeader(http.StatusNoContent)
 				return

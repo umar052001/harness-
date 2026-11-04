@@ -322,6 +322,10 @@ func (s *Server) publishedSite(w http.ResponseWriter, r *http.Request) bool {
 	if !ok {
 		return false
 	}
+	if s.publishIndex == nil {
+		http.Error(w, "workspace storage unavailable", http.StatusServiceUnavailable)
+		return true
+	}
 	pub, published := s.publishIndex.get(id)
 	if !published {
 		http.Error(w, "this address names a run that has not been published; open the dashboard to publish it", http.StatusNotFound)

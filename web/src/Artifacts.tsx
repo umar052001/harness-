@@ -13,32 +13,10 @@ import {
 import type { ActiveRun, Listing, RunSummary } from './types'
 import { appStatusLabel, type AppStatus } from './app-status'
 
-/**
- * Device widths the preview can be drawn at.
- *
- * `fill` is 0 rather than a number because "as wide as the space available" is
- * not a width - it is the absence of one. The rest are the three widths a
- * layout is actually reviewed at, and they are deliberately the small ones: a
- * phone is where a page is used, and a preview that only ever shows 1400px
- * hides every problem worth finding.
- */
+// Zero fits the panel; other values keep a real device width without scaling.
 const PREVIEW_WIDTHS = { fill: 0, phone: 390, tablet: 834, desktop: 1440 } as const
 type PreviewWidth = keyof typeof PREVIEW_WIDTHS
 
-/**
- * The artifacts panel: what the run actually produced.
- *
- * The first version of this dashboard streamed events and stopped there, so a
- * user who asked for a website got a transcript and no way to see the website.
- * This panel is the answer, in three parts: a file list, a live preview when
- * there is an HTML file to frame, and a source view for everything else.
- *
- * The listing refreshes on a timer while a run is live. Polling rather than
- * pushing is a deliberate trade: the file tree changes in ways the event stream
- * does not describe (an agent writes a hundred files between two events), and
- * three seconds of staleness is invisible next to the complexity of a second
- * channel.
- */
 export default function Artifacts(props: {
   runId: string | null
   running: boolean
@@ -77,6 +55,7 @@ export default function Artifacts(props: {
   const [previewState, setPreviewState] = createSignal<'checking' | 'ok' | 'error'>('ok')
 
   let timer: number | undefined
+  let previewDialog: HTMLDialogElement | undefined
 
   async function refreshApp() {
     const id = props.runId
@@ -263,6 +242,7 @@ export default function Artifacts(props: {
   // width the rail has no button for would otherwise survive as a frame
   // scrolled off to one side with nothing showing as selected.
   const closePreview = () => {
+    previewDialog?.close()
     if (width() !== 'fill' && width() !== 'phone') setWidth('fill')
     setExpanded(false)
   }
@@ -495,7 +475,7 @@ export default function Artifacts(props: {
             onClick={reload}
             title="Reload the preview"
             aria-label="Reload the preview"
-            class="grid size-6 shrink-0 place-items-center rounded text-zinc-500 transition hover:text-cyan-300"
+            class="grid size-8 shrink-0 place-items-center rounded text-zinc-500 transition hover:text-cyan-300"
           >
             ⟳
           </button>
@@ -504,7 +484,7 @@ export default function Artifacts(props: {
             onClick={() => setExpanded(true)}
             title="Open the preview on its own"
             aria-label="Open the preview on its own"
-            class="grid size-6 shrink-0 place-items-center rounded text-zinc-500 transition hover:text-cyan-300"
+            class="grid size-8 shrink-0 place-items-center rounded text-zinc-500 transition hover:text-cyan-300"
           >
             ⤢
           </button>
@@ -721,10 +701,10 @@ export default function Artifacts(props: {
           itself off screen. */}
       <Show when={expanded() && previewURL()}>
         <Portal>
-          <div
-            class="fixed inset-0 z-50 flex flex-col bg-surface-0"
-            role="dialog"
-            aria-modal="true"
+          <dialog
+            ref={el => { previewDialog = el; queueMicrotask(() => el.isConnected && el.showModal()) }}
+            onCancel={e => { e.preventDefault(); closePreview() }}
+            class="fixed inset-0 z-50 m-0 flex h-dvh max-h-none w-screen max-w-none flex-col border-0 bg-surface-0 p-0 text-inherit"
             aria-label="Preview"
           >
             <div class="flex shrink-0 items-center gap-2 border-b border-hairline px-3 py-2">
@@ -797,20 +777,13 @@ export default function Artifacts(props: {
                 padded
               />
             </Show>
-          </div>
+          </dialog>
         </Portal>
       </Show>
     </section>
   )
 }
 
-/**
- * PreviewFrame is the run's page inside a browser-shaped frame.
- *
- * The chrome is not decoration for its own sake: an address bar showing the
- * real path is what tells you *which* page you are looking at, which matters
- * when a project has several entry points and the panel picked one.
- */
 function PreviewFrame(props: {
   url: string
   sandbox: string
@@ -821,7 +794,7 @@ function PreviewFrame(props: {
   return (
     <div class={`flex min-h-0 flex-1 justify-center overflow-auto bg-surface-0 ${props.padded ? 'p-4' : ''}`}>
       <div
-        class="flex min-h-0 w-full flex-col overflow-hidden rounded-md border border-hairline bg-surface-2 shadow-[0_0_0_1px_rgba(0,0,0,0.4),0_18px_50px_-12px_rgba(0,0,0,0.8)]"
+        class="flex min-h-0 w-full shrink-0 flex-col overflow-hidden rounded-md border border-hairline bg-surface-2 shadow-[0_0_0_1px_rgba(0,0,0,0.4),0_18px_50px_-12px_rgba(0,0,0,0.8)]"
         // A device width is a real constraint, not a scale factor: a phone
         // layout has to lay out at 390px, so the frame is drawn that narrow and
         // the viewport around it scrolls. Scaling a wide frame down instead
@@ -865,14 +838,6 @@ function PreviewFrame(props: {
   )
 }
 
-/**
- * WidthPicker chooses the width the preview is drawn at.
- *
- * The two large widths are offered only in the expanded view. In a 420px rail
- * they cannot be shown without the frame shrinking to fit, which would show a
- * desktop layout at phone size - the exact illusion this control exists to
- * prevent.
- */
 function WidthPicker(props: {
   value: PreviewWidth
   expanded: boolean

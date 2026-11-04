@@ -1,9 +1,4 @@
 // Command server exposes the harness++ control plane over HTTP.
-//
-// Three routes and nothing else: a health check, the harness catalogue, and a
-// run endpoint that streams the run's whole event log as server-sent events.
-// The frontend is the only client that exists today, and it talks to nothing
-// else.
 package main
 
 import (
@@ -37,6 +32,10 @@ func main() {
 		workflowRoot = flag.String("workflow-root", "", "harness++ checkout for routed builds (default: binary parent)")
 	)
 	flag.Parse()
+	host, _, err := net.SplitHostPort(*addr)
+	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		log.Fatal("-addr must use a loopback IP, for example 127.0.0.1:8091; remote access is not authenticated")
+	}
 	if *workflowRoot == "" {
 		binary, err := os.Executable()
 		if err != nil {
@@ -84,7 +83,7 @@ func main() {
 	defer stop()
 	httpSrv := &http.Server{
 		Addr:              *addr,
-		Handler:           srv.Handler(),
+		Handler:           api.LocalHandler(srv.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },

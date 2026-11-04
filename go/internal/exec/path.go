@@ -1,4 +1,4 @@
-package runner
+package exec
 
 import (
 	"context"
@@ -39,4 +39,25 @@ func withoutMiseShims(path string) string {
 		dirs = append(dirs, dir)
 	}
 	return strings.Join(dirs, string(os.PathListSeparator))
+}
+
+// RuntimeReadPaths grants installed toolchains without granting host configuration.
+func RuntimeReadPaths() []string {
+	// Chromium needs to list PCI devices even with GPU rendering disabled.
+	candidates := []string{"/sys/bus/pci/devices"}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, ".local", "share", "mise", "installs"),
+			filepath.Join(home, ".nvm"),
+			filepath.Join(home, ".volta"),
+			filepath.Join(home, ".bun"),
+		)
+	}
+	var dirs []string
+	for _, d := range candidates {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
 }

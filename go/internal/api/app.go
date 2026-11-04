@@ -3,8 +3,6 @@ package api
 import (
 	"context"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"time"
 
 	"github.com/umar052001/ai-os/go/internal/environment"
@@ -96,9 +94,7 @@ func (s *Server) proxyApp(w http.ResponseWriter, r *http.Request, id string) {
 			return
 		}
 	}
-	target, _ := url.Parse(address)
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Transport = &http.Transport{ResponseHeaderTimeout: 10 * time.Second, DisableKeepAlives: true}
+	proxy := environment.NewAppProxy(address)
 	proxy.ModifyResponse = func(res *http.Response) error {
 		res.Header.Set("Content-Security-Policy", "frame-ancestors "+dashboardAncestors(r.Host, id))
 		res.Header.Set("X-Content-Type-Options", "nosniff")

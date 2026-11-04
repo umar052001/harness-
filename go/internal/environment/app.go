@@ -7,8 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -112,10 +110,7 @@ func routeAddress(processes []appProcess, path string) string {
 
 func newAppGateway(processes []appProcess) *http.Server {
 	return &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		target, _ := url.Parse(routeAddress(processes, r.URL.Path))
-		proxy := httputil.NewSingleHostReverseProxy(target)
-		proxy.Transport = &http.Transport{ResponseHeaderTimeout: 10 * time.Second, DisableKeepAlives: true}
-		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) { http.Error(w, "service unavailable", 502) }
+		proxy := NewAppProxy(routeAddress(processes, r.URL.Path))
 		proxy.ServeHTTP(w, r)
 	})}
 }
@@ -170,7 +165,7 @@ func (a *Apps) Start(ctx context.Context, lifetime context.Context, bin, id, wor
 		a.update(func(s *AppStatus) { s.Status = "failed"; s.Error = err.Error() })
 		return "", err
 	}
-	runCtx, cancel := context.WithTimeout(lifetime, 24*time.Hour)
+	runCtx, cancel := context.WithCancel(lifetime)
 	a.mu.Lock()
 	a.cancel = cancel
 	a.mu.Unlock()
@@ -201,7 +196,10 @@ func (a *Apps) Start(ctx context.Context, lifetime context.Context, bin, id, wor
 			l.Close()
 		}
 	}()
-	env := []string{"PATH=/usr/bin:/bin", "HOME=" + workspace, "HOST=127.0.0.1", "NODE_ENV=production", "GOTOOLCHAIN=local"}
+	env := []string{"PATH=" + sbx.RuntimePath(), "HOME=" + workspace, "HOST=127.0.0.1", "NODE_ENV=production", "GOTOOLCHAIN=local"}
+	if m.AI == "ollama" {
+		env = append(env, "OLLAMA_BASE_URL=http://127.0.0.1:11434", "OLLAMA_MODEL=gemma4:cloud")
+	}
 	if databaseURL != "" {
 		env = append(env, "DATABASE_URL="+databaseURL)
 	}
@@ -311,7 +309,7 @@ func (a *Apps) Start(ctx context.Context, lifetime context.Context, bin, id, wor
 func startAppProcess(ctx context.Context, bin, workspace string, env []string, step AppStep, output io.Writer) (*sbx.Stream, error) {
 	return (&sbx.Client{Binary: bin}).Stream(ctx, &sbx.StreamRequest{
 		Workspace: workspace, Cwd: filepath.Join(workspace, step.Cwd), Argv: step.Command, Env: env,
-		ReadPaths: sbx.ResolverReadPaths(),
+		ReadPaths: append(sbx.RuntimeReadPaths(), sbx.ResolverReadPaths()...),
 		AllowNet:  true, NetWhy: "build, serve and verify the local project and its database", Stdio: sbx.StdioPipe, Stdout: output, Stderr: output,
 	})
 }

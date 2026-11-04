@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -77,6 +78,8 @@ func (s *Server) executeJob(ctx context.Context, req runner.Request, id string, 
 	}
 	if saveErr := s.store.saveMetadata(id, meta); saveErr != nil {
 		log.Printf("save run %s: %v", id, saveErr)
+		err = errors.Join(err, fmt.Errorf("save run outcome: %w", saveErr))
+		meta.Status, meta.Error = "failed", err.Error()
 	}
 	terminal, _ := json.Marshal(runner.Event{Kind: runner.KindRunFinished, At: finished, Text: meta.Status,
 		Data: json.RawMessage(mustJSONStatus(err == nil, meta.Status, meta.Error))})
